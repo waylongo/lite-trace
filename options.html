@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>浅译 LiteTrace 设置</title>
+    <script type="module" src="/src/options.ts"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <section class="hero-copy">
+          <div class="hero-topline">
+            <img
+              class="hero-logo"
+              src="/brand/litetrace-logo-horizontal.svg"
+              alt="浅译 LiteTrace 标志"
+            />
+            <p class="eyebrow">让英文网页更容易读</p>
+          </div>
+          <h1 class="hero-title">
+            <span>先配好接口</span>
+            <span>再一键阅读</span>
+          </h1>
+          <p class="hero-description">
+            使用你自己的翻译接口。配置完成后，点击图标即可开启双语阅读。
+          </p>
+          <div class="hero-tags" aria-label="核心能力">
+            <span>自带接口</span>
+            <span>整页双语</span>
+            <span>划词即译</span>
+          </div>
+        </section>
+
+        <aside class="hero-card">
+          <div class="hero-pill">3 分钟完成</div>
+          <div class="hero-steps">
+            <strong>选引擎</strong>
+            <strong>填信息</strong>
+            <strong>点验证</strong>
+          </div>
+          <p class="hero-card-copy">配置只做一次，之后点击图标即可开始阅读。</p>
+        </aside>
+      </header>
+
+      <main class="layout-grid">
+        <section class="panel flow-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">配置流程</p>
+              <h2>还差这几步</h2>
+            </div>
+            <div class="active-provider-card">
+              <span>当前接口</span>
+              <strong id="active-provider-label">读取中…</strong>
+            </div>
+          </div>
+
+          <div class="step-grid">
+            <article class="step-card">
+              <div class="step-index">01</div>
+              <div>
+                <h3>选择翻译引擎</h3>
+                <p id="step-provider-status">正在读取…</p>
+              </div>
+            </article>
+            <article class="step-card">
+              <div class="step-index">02</div>
+              <div>
+                <h3>填写必要信息</h3>
+                <p id="step-fields-status">补齐必填项。</p>
+              </div>
+            </article>
+            <article class="step-card">
+              <div class="step-index">03</div>
+              <div>
+                <h3>授权与连通性</h3>
+                <p id="step-connection-status">保存时会请求权限。</p>
+              </div>
+            </article>
+            <article class="step-card">
+              <div class="step-index">04</div>
+              <div>
+                <h3>开始使用</h3>
+                <p id="step-finish-status">完成后回网页点击图标即可。</p>
+              </div>
+            </article>
+          </div>
+
+          <form id="settings-form" class="settings-form">
+            <section class="settings-block">
+              <div class="section-head">
+                <p class="section-kicker">Step 1</p>
+                <h3>选择引擎</h3>
+              </div>
+
+              <div class="provider-picker" role="tablist" aria-label="翻译引擎">
+                <button data-provider-tab="google" class="provider-button is-active" type="button">
+                  <span>Google Translate</span>
+                  <small>快速接入</small>
+                </button>
+                <button data-provider-tab="openai" class="provider-button" type="button">
+                  <span>OpenAI Compatible</span>
+                  <small>更灵活</small>
+                </button>
+              </div>
+            </section>
+
+            <section class="settings-block">
+              <div class="section-head">
+                <p class="section-kicker">Step 2</p>
+                <h3>填写信息</h3>
+              </div>
+
+              <section class="provider-pane is-active" data-provider-pane="google">
+                <div class="inline-note">
+                  只需一个 API Key。
+                </div>
+
+                <label class="field">
+                  <span>Google Translate API Key</span>
+                  <input
+                    id="google-api-key"
+                    name="google-api-key"
+                    type="password"
+                    placeholder="AIza..."
+                    autocomplete="off"
+                  />
+                  <small>用于双语阅读与划词翻译。</small>
+                </label>
+              </section>
+
+              <section class="provider-pane" data-provider-pane="openai">
+                <div class="inline-note">
+                  支持官方 OpenAI 和兼容网关。
+                </div>
+
+                <label class="field">
+                  <span>Base URL</span>
+                  <input
+                    id="openai-base-url"
+                    name="openai-base-url"
+                    type="url"
+                    placeholder="https://api.openai.com/v1"
+                    autocomplete="off"
+                  />
+                  <small>会自动整理 `/chat/completions`。</small>
+                </label>
+
+                <label class="field">
+                  <span>模型名称</span>
+                  <input
+                    id="openai-model"
+                    name="openai-model"
+                    type="text"
+                    placeholder="gpt-4.1-mini"
+                    autocomplete="off"
+                  />
+                  <small>建议选择稳定、响应快的模型。</small>
+                </label>
+
+                <label class="field">
+                  <span>API Key</span>
+                  <input
+                    id="openai-api-key"
+                    name="openai-api-key"
+                    type="password"
+                    placeholder="sk-..."
+                    autocomplete="off"
+                  />
+                  <small>仅保存在本地。</small>
+                </label>
+              </section>
+            </section>
+
+            <section class="settings-block">
+              <div class="section-head">
+                <p class="section-kicker">Step 3</p>
+                <h3>保存并验证</h3>
+              </div>
+
+              <div class="action-card">
+                <p class="action-copy">
+                  保存时会请求权限。建议直接验证一次。
+                </p>
+                <div class="button-row">
+                  <button id="save-button" class="ghost-button" type="submit">
+                    仅保存
+                  </button>
+                  <button id="verify-button" class="primary-button" type="button">
+                    保存并验证
+                  </button>
+                </div>
+              </div>
+            </section>
+          </form>
+
+          <div id="feedback" class="feedback" aria-live="polite">
+            正在准备…
+          </div>
+
+          <section id="success-panel" class="success-panel" hidden>
+            <div>
+              <p class="section-kicker">Step 4</p>
+              <h3 id="success-title">完成</h3>
+              <p id="success-description">
+                返回网页后，点击图标即可开始。
+              </p>
+            </div>
+            <div class="button-row">
+              <button id="finish-button" class="primary-button" type="button">
+                返回开始使用
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <aside class="side-panel">
+          <section class="panel side-card">
+            <p class="panel-kicker">使用提示</p>
+            <h2>怎么用</h2>
+            <ul class="status-list">
+              <li>点击图标：开启整页双语</li>
+              <li>划词：查看局部译文</li>
+              <li>目标语言：简体中文</li>
+            </ul>
+          </section>
+
+          <section class="panel side-card">
+            <p class="panel-kicker">说明</p>
+            <h2>为什么要自带接口</h2>
+            <p class="side-copy">
+              你可以自己控制成本、模型和可用性。
+            </p>
+          </section>
+        </aside>
+      </main>
+    </div>
+  </body>
+</html>

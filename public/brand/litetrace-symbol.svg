@@ -1,0 +1,24 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tileGradientV2" x1="32" y1="28" x2="226" y2="226" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D6C4F" />
+      <stop offset="1" stop-color="#124B84" />
+    </linearGradient>
+    <linearGradient id="translationGradientV2" x1="142" y1="76" x2="202" y2="174" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D6C4F" />
+      <stop offset="1" stop-color="#124B84" />
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="208" height="208" rx="52" fill="url(#tileGradientV2)" />
+  <rect x="46" y="46" width="164" height="164" rx="34" fill="#F8F7F2" fill-opacity="0.96" />
+  <rect x="126" y="72" width="4" height="112" rx="2" fill="#D6E4DB" />
+  <rect x="66" y="76" width="44" height="14" rx="7" fill="#8EA094" />
+  <rect x="66" y="102" width="34" height="14" rx="7" fill="#A3B1A8" />
+  <rect x="66" y="128" width="48" height="14" rx="7" fill="#8EA094" />
+  <rect x="66" y="154" width="28" height="14" rx="7" fill="#A3B1A8" />
+  <rect x="144" y="76" width="46" height="14" rx="7" fill="url(#translationGradientV2)" />
+  <rect x="144" y="102" width="34" height="14" rx="7" fill="url(#translationGradientV2)" fill-opacity="0.9" />
+  <rect x="144" y="128" width="44" height="14" rx="7" fill="url(#translationGradientV2)" />
+  <rect x="144" y="154" width="24" height="14" rx="7" fill="url(#translationGradientV2)" fill-opacity="0.9" />
+  <rect x="58" y="58" width="140" height="140" rx="26" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="2" />
+</svg>

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "浅译 LiteTrace",
+  "description": "沉浸式双语对照翻译与划词 AI 翻译。",
+  "version": "0.1.0",
+  "icons": {
+    "16": "icons/litetrace-16.png",
+    "32": "icons/litetrace-32.png",
+    "48": "icons/litetrace-48.png",
+    "128": "icons/litetrace-128.png"
+  },
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus"],
+  "optional_host_permissions": [
+    "https://translation.googleapis.com/*",
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "浅译 LiteTrace",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/litetrace-16.png",
+      "32": "icons/litetrace-32.png",
+      "48": "icons/litetrace-48.png",
+      "128": "icons/litetrace-128.png"
+    }
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

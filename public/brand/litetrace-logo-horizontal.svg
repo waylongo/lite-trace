@@ -1,0 +1,29 @@
+<svg width="760" height="220" viewBox="0 0 760 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tileGradientV2" x1="40" y1="32" x2="194" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D6C4F" />
+      <stop offset="1" stop-color="#124B84" />
+    </linearGradient>
+    <linearGradient id="translationGradientV2" x1="128" y1="72" x2="188" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D6C4F" />
+      <stop offset="1" stop-color="#124B84" />
+    </linearGradient>
+  </defs>
+  <g transform="translate(20 20) scale(0.703125)">
+    <rect x="24" y="24" width="208" height="208" rx="52" fill="url(#tileGradientV2)" />
+    <rect x="46" y="46" width="164" height="164" rx="34" fill="#F8F7F2" fill-opacity="0.96" />
+    <rect x="126" y="72" width="4" height="112" rx="2" fill="#D6E4DB" />
+    <rect x="66" y="76" width="44" height="14" rx="7" fill="#8EA094" />
+    <rect x="66" y="102" width="34" height="14" rx="7" fill="#A3B1A8" />
+    <rect x="66" y="128" width="48" height="14" rx="7" fill="#8EA094" />
+    <rect x="66" y="154" width="28" height="14" rx="7" fill="#A3B1A8" />
+    <rect x="144" y="76" width="46" height="14" rx="7" fill="url(#translationGradientV2)" />
+    <rect x="144" y="102" width="34" height="14" rx="7" fill="url(#translationGradientV2)" fill-opacity="0.9" />
+    <rect x="144" y="128" width="44" height="14" rx="7" fill="url(#translationGradientV2)" />
+    <rect x="144" y="154" width="24" height="14" rx="7" fill="url(#translationGradientV2)" fill-opacity="0.9" />
+  </g>
+  <text x="232" y="94" fill="#1F3026" font-family="SF Pro Display, PingFang SC, Microsoft YaHei, sans-serif" font-size="68" font-weight="700" letter-spacing="0.02em">浅译</text>
+  <text x="236" y="150" fill="#596B61" font-family="SF Pro Display, PingFang SC, Microsoft YaHei, sans-serif" font-size="34" font-weight="560" letter-spacing="0.08em">LiteTrace</text>
+  <rect x="232" y="164" width="86" height="10" rx="5" fill="#1F3026" fill-opacity="0.08" />
+  <rect x="326" y="164" width="110" height="10" rx="5" fill="#0D6C4F" fill-opacity="0.14" />
+</svg>
