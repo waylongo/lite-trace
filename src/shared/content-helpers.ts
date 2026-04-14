@@ -4,41 +4,26 @@ import type {
 } from "./types";
 
 const MIN_TRANSLATABLE_LENGTH = 18;
+const MIN_TRANSLATABLE_HEADING_LENGTH = 6;
 const MAX_TRANSLATABLE_LENGTH = 1_800;
+const MAX_SELECTION_TRANSLATABLE_LENGTH = 600;
 const MIN_ENGLISH_RATIO = 0.45;
-
-const BLOCK_SELECTORS = [
-  "article p",
-  "article li",
-  "article blockquote",
-  "article figcaption",
-  "article h1",
-  "article h2",
-  "article h3",
-  "article h4",
-  "article h5",
-  "article h6",
-  "main p",
-  "main li",
-  "main blockquote",
-  "main figcaption",
-  "main h1",
-  "main h2",
-  "main h3",
-  "main h4",
-  "main h5",
-  "main h6",
-  "body p",
-  "body li",
-  "body blockquote",
-  "body figcaption",
-  "body h1",
-  "body h2",
-  "body h3",
-  "body h4",
-  "body h5",
-  "body h6"
-];
+const TARGET_TAGS = new Set([
+  "P",
+  "LI",
+  "BLOCKQUOTE",
+  "FIGCAPTION",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6"
+]);
+const ROOT_SELECTORS = ["article", "main", "[role='main']"] as const;
+const TARGET_TAG_SELECTOR = Array.from(TARGET_TAGS)
+  .map((tagName) => tagName.toLowerCase())
+  .join(",");
 
 const SKIP_SELECTOR = [
   "script",
@@ -52,7 +37,6 @@ const SKIP_SELECTOR = [
   "select",
   "option",
   "nav",
-  "header",
   "footer",
   "aside",
   "[contenteditable='']",
@@ -88,6 +72,39 @@ export function isTranslatableEnglishText(text: string): boolean {
   return calculateEnglishRatio(normalized) >= MIN_ENGLISH_RATIO;
 }
 
+function isHeadingTag(tagName: string): boolean {
+  return /^H[1-6]$/.test(tagName);
+}
+
+export function isTranslatableBlockText(
+  element: HTMLElement,
+  text: string
+): boolean {
+  const normalized = normalizeText(text);
+  const minLength = isHeadingTag(element.tagName)
+    ? MIN_TRANSLATABLE_HEADING_LENGTH
+    : MIN_TRANSLATABLE_LENGTH;
+
+  if (
+    normalized.length < minLength ||
+    normalized.length > MAX_TRANSLATABLE_LENGTH
+  ) {
+    return false;
+  }
+
+  return calculateEnglishRatio(normalized) >= MIN_ENGLISH_RATIO;
+}
+
+export function isTranslatableSelectionText(text: string): boolean {
+  const normalized = normalizeText(text);
+
+  if (!normalized || normalized.length > MAX_SELECTION_TRANSLATABLE_LENGTH) {
+    return false;
+  }
+
+  return /[A-Za-z]/.test(normalized);
+}
+
 export function isVisibleElement(element: HTMLElement): boolean {
   const style = window.getComputedStyle(element);
   return (
@@ -116,33 +133,169 @@ export function isSkippableElement(element: HTMLElement): boolean {
   return Boolean(element.closest(SKIP_SELECTOR));
 }
 
+function hasNestedTargetBlock(element: HTMLElement): boolean {
+  return Boolean(element.querySelector(TARGET_TAG_SELECTOR));
+}
+
+interface ScanRoot {
+  element: HTMLElement;
+  priority: number;
+}
+
+function getQueryRoot(root: ParentNode): ParentNode | null {
+  if (root instanceof Document) {
+    return root;
+  }
+
+  return root instanceof HTMLElement ? root : null;
+}
+
+function collectPreferredRoots(root: ParentNode): ScanRoot[] {
+  const queryRoot = getQueryRoot(root);
+
+  if (!queryRoot) {
+    return [];
+  }
+
+  const candidates: ScanRoot[] = [];
+
+  ROOT_SELECTORS.forEach((selector, priority) => {
+    if (queryRoot instanceof HTMLElement && queryRoot.matches(selector)) {
+      candidates.push({
+        element: queryRoot,
+        priority
+      });
+    }
+
+    candidates.push(
+      ...Array.from(queryRoot.querySelectorAll<HTMLElement>(selector)).map((element) => ({
+        element,
+        priority
+      }))
+    );
+  });
+
+  const selected: ScanRoot[] = [];
+  const seen = new Set<HTMLElement>();
+
+  for (const candidate of candidates) {
+    if (seen.has(candidate.element)) {
+      continue;
+    }
+
+    seen.add(candidate.element);
+
+    if (selected.some((rootCandidate) => rootCandidate.element.contains(candidate.element))) {
+      continue;
+    }
+
+    selected.push(candidate);
+  }
+
+  selected.sort((left, right) => {
+    const position = left.element.compareDocumentPosition(right.element);
+
+    if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+      return -1;
+    }
+
+    if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+      return 1;
+    }
+
+    return left.priority - right.priority;
+  });
+
+  return selected;
+}
+
+function getFallbackRoot(root: ParentNode): HTMLElement | null {
+  if (root instanceof Document) {
+    return root.body;
+  }
+
+  return root instanceof HTMLElement ? root : null;
+}
+
+function isClaimedByHigherPriorityRoot(
+  element: HTMLElement,
+  currentRoot: ScanRoot,
+  roots: ScanRoot[]
+): boolean {
+  return roots.some((rootCandidate) => {
+    if (rootCandidate.element === currentRoot.element) {
+      return false;
+    }
+
+    if (!currentRoot.element.contains(rootCandidate.element)) {
+      return false;
+    }
+
+    if (!rootCandidate.element.contains(element)) {
+      return false;
+    }
+
+    if (rootCandidate.priority !== currentRoot.priority) {
+      return rootCandidate.priority < currentRoot.priority;
+    }
+
+    return true;
+  });
+}
+
 export function collectTranslatableBlocks(
   root: ParentNode = document
 ): TranslatableBlock[] {
-  const candidates = Array.from(
-    root.querySelectorAll<HTMLElement>(BLOCK_SELECTORS.join(","))
-  );
+  const preferredRoots = collectPreferredRoots(root);
+  const scanRoots =
+    preferredRoots.length > 0
+      ? preferredRoots
+      : (() => {
+          const fallbackRoot = getFallbackRoot(root);
+          return fallbackRoot
+            ? [
+                {
+                  element: fallbackRoot,
+                  priority: ROOT_SELECTORS.length
+                }
+              ]
+            : [];
+        })();
   const seen = new Set<HTMLElement>();
   const blocks: TranslatableBlock[] = [];
 
-  for (const element of candidates) {
-    if (seen.has(element)) {
-      continue;
+  for (const scanRoot of scanRoots) {
+    const walker = scanRoot.element.ownerDocument.createTreeWalker(
+      scanRoot.element,
+      NodeFilter.SHOW_ELEMENT
+    );
+
+    let currentNode: Node | null = walker.currentNode;
+
+    while (currentNode) {
+      if (currentNode instanceof HTMLElement) {
+        const element = currentNode;
+
+        if (
+          TARGET_TAGS.has(element.tagName) &&
+          !seen.has(element) &&
+          !hasNestedTargetBlock(element) &&
+          !isClaimedByHigherPriorityRoot(element, scanRoot, scanRoots)
+        ) {
+          seen.add(element);
+
+          if (!isSkippableElement(element) && isVisibleElement(element)) {
+            const text = normalizeText(element.textContent ?? "");
+
+            if (text && isTranslatableBlockText(element, text)) {
+              blocks.push({ element, text });
+            }
+          }
+        }
+      }
+
+      currentNode = walker.nextNode() ?? null;
     }
-
-    seen.add(element);
-
-    if (!isVisibleElement(element) || isSkippableElement(element)) {
-      continue;
-    }
-
-    const text = normalizeText(element.innerText || element.textContent || "");
-
-    if (!isTranslatableEnglishText(text)) {
-      continue;
-    }
-
-    blocks.push({ element, text });
   }
 
   return blocks;

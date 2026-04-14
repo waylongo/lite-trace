@@ -12,7 +12,6 @@ export interface OpenAISettings {
 
 export interface PreferencesSettings {
   targetLang: "zh-CN";
-  selectionUi: "auto-popup";
   pageScope: "static-content";
   hasCompletedSetup: boolean;
   hasSeenReadingCoachmark: boolean;
@@ -43,6 +42,8 @@ export interface TranslationMeta {
   networkCount: number;
 }
 
+export type TranslationScene = "selection" | "page";
+
 export interface TranslationSuccess {
   ok: true;
   translations: string[];
@@ -58,7 +59,9 @@ export type TranslationResponse = TranslationSuccess | TranslationFailure;
 
 export interface TranslationRequestPayload {
   texts: string[];
+  scene?: TranslationScene;
   settingsOverride?: ExtensionSettings;
+  immersiveJobId?: number;
 }
 
 export interface ExtensionStatus {
@@ -74,10 +77,16 @@ export interface ReadingCoachmarkStatus {
 }
 
 export type RuntimeMessage =
+  | { type: "PING" }
   | { type: "TOGGLE_IMMERSIVE_TRANSLATION" }
   | { type: "GET_PAGE_IMMERSIVE_STATE" }
   | { type: "TRANSLATE_PAGE_BLOCKS"; payload: TranslationRequestPayload }
   | { type: "TRANSLATE_SELECTION"; payload: TranslationRequestPayload }
+  | { type: "TRIGGER_SELECTION_TRANSLATION"; payload?: { text?: string } }
+  | {
+      type: "CANCEL_IMMERSIVE_TRANSLATION";
+      payload: { immersiveJobId: number };
+    }
   | { type: "OPEN_OPTIONS" }
   | { type: "GET_EXTENSION_STATUS" }
   | { type: "TRIGGER_ACTIVE_TAB_IMMERSIVE" }
@@ -106,7 +115,6 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   },
   preferences: {
     targetLang: "zh-CN",
-    selectionUi: "auto-popup",
     pageScope: "static-content",
     hasCompletedSetup: false,
     hasSeenReadingCoachmark: false

@@ -4,13 +4,19 @@ import {
 } from "./shared/settings";
 import { TranslationProviderError } from "./shared/providers";
 import { getSettings } from "./shared/storage";
-import type { ExtensionStatus } from "./shared/types";
+import type { ExtensionStatus, RuntimeMessage } from "./shared/types";
 
 const HTTP_PREFIX = /^https?:\/\//i;
 
 interface PageImmersiveStateResponse {
   ok?: boolean;
   immersiveActive?: boolean;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function injectContentScript(tabId: number): Promise<void> {
@@ -22,18 +28,28 @@ async function injectContentScript(tabId: number): Promise<void> {
 
 async function sendTabMessageWithRecovery<TResponse>(
   tabId: number,
-  message: { type: string }
+  message: RuntimeMessage
 ): Promise<TResponse> {
   try {
     return (await chrome.tabs.sendMessage(tabId, message)) as TResponse;
   } catch {
-    await injectContentScript(tabId);
-
     try {
-      return (await chrome.tabs.sendMessage(tabId, message)) as TResponse;
+      await injectContentScript(tabId);
     } catch {
-      throw new Error("当前页面没有成功连接 LiteTrace，请刷新页面后再试一次。");
+      throw new Error("当前页面暂不支持 LiteTrace，请切换到普通网页后重试。");
     }
+
+    for (const waitMs of [40, 120, 260]) {
+      await delay(waitMs);
+
+      try {
+        return (await chrome.tabs.sendMessage(tabId, message)) as TResponse;
+      } catch {
+        // Keep retrying for the just-injected content script to finish wiring listeners.
+      }
+    }
+
+    throw new Error("当前页面没有成功连接 LiteTrace，请稍后重试。");
   }
 }
 
@@ -75,7 +91,6 @@ export async function getActiveTabImmersiveState(
   }
 
   try {
-    await ensureContentScript(tab.id);
     const response = (await sendTabMessageWithRecovery<PageImmersiveStateResponse>(tab.id, {
       type: "GET_PAGE_IMMERSIVE_STATE"
     })) as PageImmersiveStateResponse | undefined;
@@ -117,10 +132,20 @@ export async function triggerActiveTabImmersive(): Promise<{ ok: true }> {
     throw new Error("当前标签页不支持开启沉浸阅读，请切换到普通网页后重试。");
   }
 
-  await ensureContentScript(tab.id);
   await sendTabMessageWithRecovery(tab.id, {
     type: "TOGGLE_IMMERSIVE_TRANSLATION"
   });
 
+  return { ok: true };
+}
+
+export async function triggerTabSelectionTranslation(
+  tabId: number,
+  selectionText?: string
+): Promise<{ ok: true }> {
+  await sendTabMessageWithRecovery(tabId, {
+    type: "TRIGGER_SELECTION_TRANSLATION",
+    payload: selectionText ? { text: selectionText } : undefined
+  });
   return { ok: true };
 }

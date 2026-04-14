@@ -2,6 +2,7 @@ import {
   collectTranslatableBlocks,
   groupTranslatableBlocks,
   isEditableNode,
+  isTranslatableSelectionText,
   isTranslatableEnglishText,
   normalizeText
 } from "./shared/content-helpers";
@@ -20,22 +21,38 @@ import type {
 } from "./shared/types";
 
 const STYLE_ID = "litetrace-inline-style";
+const BUBBLE_ID = "litetrace-selection-bubble";
 const POPUP_ID = "litetrace-selection-popup";
 const TOAST_ID = "litetrace-toast";
+const CONTENT_RUNTIME_FLAG = "__litetraceInitialized";
 
 let lastPointer = { x: 0, y: 0 };
+let bubbleEl: HTMLButtonElement | null = null;
 let popupEl: HTMLDivElement | null = null;
+let toastEl: HTMLDivElement | null = null;
 let selectionTimer: number | null = null;
 let requestSequence = 0;
-let popupInteraction = false;
+let uiInteraction = false;
 let toastTimer: number | null = null;
 let immersiveJobId = 0;
 let immersiveLoading = false;
+let activeSelection: SelectionSnapshot | null = null;
 
 interface ImmersiveFailureState {
   message: string;
   action?: "open-options";
 }
+
+interface SelectionSnapshot {
+  text: string;
+  rect: DOMRect | null;
+  key: string;
+  fallbackPlacement?: "pointer" | "viewport-top-right";
+}
+
+type LiteTraceWindow = Window & {
+  [CONTENT_RUNTIME_FLAG]?: boolean;
+};
 
 function injectStyles(): void {
   if (document.getElementById(STYLE_ID)) {
@@ -46,15 +63,41 @@ function injectStyles(): void {
   style.id = STYLE_ID;
   style.textContent = `
     .litetrace-immersive-translation {
-      margin: 0.45rem 0 1rem;
-      padding: 0.7rem 0.95rem;
-      border-left: 3px solid #0b6e4f;
-      border-radius: 0 14px 14px 0;
-      background: linear-gradient(135deg, rgba(242, 250, 245, 0.98), rgba(232, 244, 255, 0.95));
-      color: #123524;
-      font-size: 0.95em;
-      line-height: 1.8;
-      box-shadow: 0 8px 22px rgba(8, 63, 44, 0.08);
+      color: inherit;
+      margin-block-start: 0 !important;
+    }
+
+    [data-litetrace-source] {
+      margin-block-end: 0.14em !important;
+    }
+
+    [data-litetrace-source]:is(h1, h2, h3, h4, h5, h6) {
+      margin-block-end: 0.06em !important;
+    }
+
+    .litetrace-immersive-translation:is(h1, h2, h3, h4, h5, h6) {
+      margin-block-start: 0 !important;
+    }
+
+    #${BUBBLE_ID} {
+      position: fixed;
+      z-index: 2147483647;
+      min-width: 68px;
+      height: 38px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #0a6f51, #2767a7);
+      color: white;
+      box-shadow: 0 14px 32px rgba(9, 49, 37, 0.22);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    #${BUBBLE_ID}[hidden] {
+      display: none;
     }
 
     #${POPUP_ID} {
@@ -181,8 +224,57 @@ function injectStyles(): void {
   document.documentElement.append(style);
 }
 
+function markUiInteraction(): void {
+  uiInteraction = true;
+  window.setTimeout(() => {
+    uiInteraction = false;
+  }, 0);
+}
+
+function getBubble(): HTMLButtonElement {
+  if (bubbleEl) {
+    return bubbleEl;
+  }
+
+  const existing = document.getElementById(BUBBLE_ID) as HTMLButtonElement | null;
+
+  if (existing) {
+    bubbleEl = existing;
+    return bubbleEl;
+  }
+
+  bubbleEl = document.createElement("button");
+  bubbleEl.id = BUBBLE_ID;
+  bubbleEl.type = "button";
+  bubbleEl.hidden = true;
+  bubbleEl.textContent = "浅译";
+
+  bubbleEl.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    markUiInteraction();
+  });
+
+  bubbleEl.addEventListener("click", () => {
+    if (!activeSelection) {
+      return;
+    }
+
+    void translateSelectionSnapshot(activeSelection);
+  });
+
+  document.documentElement.append(bubbleEl);
+  return bubbleEl;
+}
+
 function getPopup(): HTMLDivElement {
   if (popupEl) {
+    return popupEl;
+  }
+
+  const existing = document.getElementById(POPUP_ID) as HTMLDivElement | null;
+
+  if (existing) {
+    popupEl = existing;
     return popupEl;
   }
 
@@ -199,10 +291,7 @@ function getPopup(): HTMLDivElement {
   `;
 
   popupEl.addEventListener("mousedown", () => {
-    popupInteraction = true;
-    window.setTimeout(() => {
-      popupInteraction = false;
-    }, 0);
+    markUiInteraction();
   });
 
   popupEl
@@ -216,17 +305,23 @@ function getPopup(): HTMLDivElement {
 }
 
 function getToast(): HTMLDivElement {
+  if (toastEl) {
+    return toastEl;
+  }
+
   let toast = document.getElementById(TOAST_ID) as HTMLDivElement | null;
 
   if (toast) {
-    return toast;
+    toastEl = toast;
+    return toastEl;
   }
 
   toast = document.createElement("div");
   toast.id = TOAST_ID;
   toast.hidden = true;
   document.documentElement.append(toast);
-  return toast;
+  toastEl = toast;
+  return toastEl;
 }
 
 async function openOptionsPage(): Promise<void> {
@@ -307,18 +402,59 @@ function hidePopup(): void {
   }
 }
 
-function positionPopup(target: HTMLElement, rect: DOMRect | null): void {
+function hideBubble(): void {
+  if (bubbleEl) {
+    bubbleEl.hidden = true;
+  }
+}
+
+function positionPopup(
+  target: HTMLElement,
+  rect: DOMRect | null,
+  fallbackPlacement: "pointer" | "viewport-top-right" = "pointer"
+): void {
   const width = Math.min(360, window.innerWidth - 24);
-  const fallbackLeft = Math.max(12, Math.min(lastPointer.x - width / 2, window.innerWidth - width - 12));
+  const fallbackLeft =
+    fallbackPlacement === "viewport-top-right"
+      ? window.innerWidth - width - 12
+      : Math.max(
+          12,
+          Math.min(lastPointer.x - width / 2, window.innerWidth - width - 12)
+        );
   const left = rect
-    ? Math.max(12, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 12))
+    ? Math.max(
+        12,
+        Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 12)
+      )
     : fallbackLeft;
 
-  const preferredTop = rect ? rect.bottom + 12 : lastPointer.y + 12;
+  const preferredTop =
+    rect
+      ? rect.bottom + 12
+      : fallbackPlacement === "viewport-top-right"
+        ? 12
+        : lastPointer.y + 12;
   const top = Math.min(preferredTop, window.innerHeight - 24);
 
   target.style.left = `${left}px`;
   target.style.top = `${Math.max(12, top)}px`;
+}
+
+function positionBubble(target: HTMLButtonElement, rect: DOMRect | null): void {
+  const width = 68;
+  const height = 38;
+  const left = rect
+    ? Math.max(
+        12,
+        Math.min(rect.right - width / 2, window.innerWidth - width - 12)
+      )
+    : Math.max(12, Math.min(lastPointer.x - width / 2, window.innerWidth - width - 12));
+  const top = rect
+    ? Math.max(12, rect.top - height - 10)
+    : Math.max(12, lastPointer.y - height - 10);
+
+  target.style.left = `${left}px`;
+  target.style.top = `${top}px`;
 }
 
 function renderPopup(
@@ -328,6 +464,7 @@ function renderPopup(
     action?: () => void;
     showCopy?: boolean;
     rect?: DOMRect | null;
+    fallbackPlacement?: "pointer" | "viewport-top-right";
   }
 ): void {
   const popup = getPopup();
@@ -362,8 +499,21 @@ function renderPopup(
     metaEl.append(actionButton);
   }
 
-  positionPopup(popup, options?.rect ?? null);
+  positionPopup(popup, options?.rect ?? null, options?.fallbackPlacement);
   popup.hidden = false;
+}
+
+function renderBubble(snapshot: SelectionSnapshot): void {
+  const bubble = getBubble();
+  positionBubble(bubble, snapshot.rect);
+  bubble.hidden = false;
+}
+
+function clearSelectionUi(): void {
+  requestSequence += 1;
+  activeSelection = null;
+  hideBubble();
+  hidePopup();
 }
 
 function getSelectionRect(selection: Selection): DOMRect | null {
@@ -382,10 +532,103 @@ function getSelectionRect(selection: Selection): DOMRect | null {
   return rects[0] ?? null;
 }
 
+function isSameRect(left: DOMRect | null, right: DOMRect | null): boolean {
+  if (!left && !right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.left === right.left &&
+    left.top === right.top &&
+    left.width === right.width &&
+    left.height === right.height
+  );
+}
+
+function isSameSelectionSnapshot(
+  left: SelectionSnapshot | null,
+  right: SelectionSnapshot | null
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.text === right.text &&
+    left.fallbackPlacement === right.fallbackPlacement &&
+    isSameRect(left.rect, right.rect)
+  );
+}
+
+function createSelectionSnapshot(selection: Selection): SelectionSnapshot | null {
+  if (selection.isCollapsed) {
+    return null;
+  }
+
+  if (isEditableNode(selection.anchorNode) || isEditableNode(selection.focusNode)) {
+    return null;
+  }
+
+  const text = normalizeText(selection.toString());
+
+  if (!isTranslatableSelectionText(text)) {
+    return null;
+  }
+
+  return {
+    text,
+    rect: getSelectionRect(selection),
+    key: text
+  };
+}
+
+function createFallbackSelectionSnapshot(text?: string): SelectionSnapshot | null {
+  const normalized = normalizeText(text ?? "");
+
+  if (!isTranslatableSelectionText(normalized)) {
+    return null;
+  }
+
+  return {
+    text: normalized,
+    rect: null,
+    key: `fallback:${normalized}`,
+    fallbackPlacement: "viewport-top-right"
+  };
+}
+
 async function requestTranslation(texts: string[]): Promise<TranslationResponse> {
   return chrome.runtime.sendMessage({
     type: texts.length > 1 ? "TRANSLATE_PAGE_BLOCKS" : "TRANSLATE_SELECTION",
-    payload: { texts }
+    payload: {
+      texts,
+      scene: texts.length > 1 ? "page" : "selection"
+    }
+  } satisfies RuntimeMessage);
+}
+
+async function requestPageTranslation(
+  texts: string[],
+  immersiveJobId: number
+): Promise<TranslationResponse> {
+  return chrome.runtime.sendMessage({
+    type: "TRANSLATE_PAGE_BLOCKS",
+    payload: {
+      texts,
+      scene: "page",
+      immersiveJobId
+    }
+  } satisfies RuntimeMessage);
+}
+
+async function cancelImmersiveTranslation(immersiveJobId: number): Promise<void> {
+  await chrome.runtime.sendMessage({
+    type: "CANCEL_IMMERSIVE_TRANSLATION",
+    payload: { immersiveJobId }
   } satisfies RuntimeMessage);
 }
 
@@ -421,8 +664,12 @@ function applyGroupedTranslations(
 
 async function toggleImmersiveTranslation(): Promise<void> {
   if (immersiveLoading) {
+    const activeJobId = immersiveJobId;
     immersiveJobId += 1;
     immersiveLoading = false;
+    void cancelImmersiveTranslation(activeJobId).catch(() => {
+      // Ignore cancellation transport failures; stale responses are still gated by job id.
+    });
     showToast("已停止当前页面的双语阅读生成。");
     return;
   }
@@ -488,7 +735,10 @@ async function toggleImmersiveTranslation(): Promise<void> {
           let response: TranslationResponse;
 
           try {
-            response = await requestTranslation(batch.map((group) => group.text));
+            response = await requestPageTranslation(
+              batch.map((group) => group.text),
+              currentJobId
+            );
           } catch {
             failure = {
               message: "生成双语阅读时中途断开了，请重新点击扩展图标再试一次。"
@@ -570,52 +820,39 @@ async function toggleImmersiveTranslation(): Promise<void> {
   }
 }
 
-function shouldKeepPopup(selectionText: string): boolean {
-  return normalizeText(selectionText).length > 0;
-}
-
-async function translateCurrentSelection(): Promise<void> {
-  const selection = window.getSelection();
-
-  if (!selection || selection.isCollapsed || !shouldKeepPopup(selection.toString())) {
-    hidePopup();
-    return;
-  }
-
-  const anchorNode = selection.anchorNode;
-  const focusNode = selection.focusNode;
-
-  if (isEditableNode(anchorNode) || isEditableNode(focusNode)) {
-    hidePopup();
-    return;
-  }
-
-  const text = normalizeText(selection.toString());
-  if (!isTranslatableEnglishText(text)) {
-    hidePopup();
-    return;
-  }
-
-  const rect = getSelectionRect(selection);
-  renderPopup("正在理解这段英文，并生成附近可直接查看的中文对照…", { rect });
+async function translateSelectionSnapshot(snapshot: SelectionSnapshot): Promise<void> {
+  activeSelection = snapshot;
+  hideBubble();
+  renderPopup("正在理解这段英文，并生成附近可直接查看的中文对照…", {
+    rect: snapshot.rect,
+    fallbackPlacement: snapshot.fallbackPlacement
+  });
 
   const sequence = ++requestSequence;
   let response: TranslationResponse;
 
   try {
-    response = await requestTranslation([text]);
+    response = await requestTranslation([snapshot.text]);
   } catch {
-    renderPopup("这次没有成功返回译文，请重试，或刷新页面后再试。", { rect });
+    if (sequence !== requestSequence || !isSameSelectionSnapshot(activeSelection, snapshot)) {
+      return;
+    }
+
+    renderPopup("这次没有成功返回译文，请重试，或刷新页面后再试。", {
+      rect: snapshot.rect,
+      fallbackPlacement: snapshot.fallbackPlacement
+    });
     return;
   }
 
-  if (sequence !== requestSequence) {
+  if (sequence !== requestSequence || !isSameSelectionSnapshot(activeSelection, snapshot)) {
     return;
   }
 
   if (!response.ok) {
     renderPopup(response.error.message, {
-      rect,
+      rect: snapshot.rect,
+      fallbackPlacement: snapshot.fallbackPlacement,
       actionLabel: response.error.action === "open-options" ? "打开设置" : undefined,
       action:
         response.error.action === "open-options"
@@ -626,9 +863,49 @@ async function translateCurrentSelection(): Promise<void> {
   }
 
   renderPopup(response.translations[0], {
-    rect,
+    rect: snapshot.rect,
+    fallbackPlacement: snapshot.fallbackPlacement,
     showCopy: true
   });
+}
+
+async function triggerSelectionTranslationFromMessage(text?: string): Promise<void> {
+  const currentSelection = window.getSelection();
+  const snapshot =
+    (currentSelection ? createSelectionSnapshot(currentSelection) : null) ??
+    createFallbackSelectionSnapshot(text);
+
+  if (!snapshot) {
+    clearSelectionUi();
+    renderPopup("这次没有检测到可翻译的英文内容，请重新选中后再试。", {
+      fallbackPlacement: "viewport-top-right"
+    });
+    return;
+  }
+
+  activeSelection = snapshot;
+  void translateSelectionSnapshot(snapshot);
+}
+
+async function updateSelectionUi(): Promise<void> {
+  const selection = window.getSelection();
+  const snapshot = selection ? createSelectionSnapshot(selection) : null;
+
+  if (!snapshot) {
+    clearSelectionUi();
+    return;
+  }
+
+  const hasChanged = !isSameSelectionSnapshot(activeSelection, snapshot);
+  activeSelection = snapshot;
+
+  if (hasChanged) {
+    hidePopup();
+  } else if (popupEl?.hidden === false) {
+    return;
+  }
+
+  renderBubble(snapshot);
 }
 
 function scheduleSelectionTranslation(): void {
@@ -637,32 +914,38 @@ function scheduleSelectionTranslation(): void {
   }
 
   selectionTimer = window.setTimeout(() => {
-    void translateCurrentSelection();
+    void updateSelectionUi();
   }, 180);
 }
 
 function handleSelectionChange(): void {
   const selection = window.getSelection();
 
-  if (popupInteraction) {
+  if (uiInteraction) {
     return;
   }
 
   if (!selection || selection.isCollapsed) {
-    hidePopup();
-    hideToast();
+    clearSelectionUi();
   }
 }
 
 function handleDocumentMouseDown(event: MouseEvent): void {
   const popup = getPopup();
-  if (!popup.hidden && event.target instanceof Node && !popup.contains(event.target)) {
-    hidePopup();
+  const bubble = getBubble();
+
+  if (
+    event.target instanceof Node &&
+    !popup.contains(event.target) &&
+    !bubble.contains(event.target)
+  ) {
+    clearSelectionUi();
   }
 }
 
 function initialize(): void {
   injectStyles();
+  getBubble();
   getPopup();
   getToast();
 
@@ -670,44 +953,60 @@ function initialize(): void {
     lastPointer = { x: event.clientX, y: event.clientY };
     scheduleSelectionTranslation();
   });
+  document.addEventListener("contextmenu", (event) => {
+    lastPointer = { x: event.clientX, y: event.clientY };
+  });
 
   document.addEventListener("selectionchange", handleSelectionChange);
   document.addEventListener("mousedown", handleDocumentMouseDown, true);
+  window.addEventListener("scroll", () => {
+    clearSelectionUi();
+  }, true);
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      hidePopup();
+      clearSelectionUi();
     }
+  });
+  chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResponse) => {
+    if (message.type === "TOGGLE_IMMERSIVE_TRANSLATION") {
+      void toggleImmersiveTranslation()
+        .catch(() => {
+          showToast("当前页面的双语阅读切换失败了，请稍后重试。");
+        })
+        .finally(() => {
+          sendResponse({ ok: true });
+        });
+      return true;
+    }
+
+    if (message.type === "GET_PAGE_IMMERSIVE_STATE") {
+      sendResponse({
+        ok: true,
+        immersiveActive: hasImmersiveTranslations(document)
+      });
+      return true;
+    }
+
+    if (message.type === "TRIGGER_SELECTION_TRANSLATION") {
+      void triggerSelectionTranslationFromMessage(message.payload?.text).finally(() => {
+        sendResponse({ ok: true });
+      });
+      return true;
+    }
+
+    if (message.type === "PING") {
+      sendResponse({ ok: true });
+      return true;
+    }
+
+    return false;
   });
 }
 
-chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResponse) => {
-  if (message.type === "TOGGLE_IMMERSIVE_TRANSLATION") {
-    void toggleImmersiveTranslation()
-      .catch(() => {
-        showToast("当前页面的双语阅读切换失败了，请稍后重试。");
-      })
-      .finally(() => {
-        sendResponse({ ok: true });
-      });
-    return true;
-  }
+const contentWindow = window as LiteTraceWindow;
 
-  if (message.type === "GET_PAGE_IMMERSIVE_STATE") {
-    sendResponse({
-      ok: true,
-      immersiveActive: hasImmersiveTranslations(document)
-    });
-    return true;
-  }
-
-  if ((message as { type?: string }).type === "PING") {
-    sendResponse({ ok: true });
-  }
-
-  return false;
-});
-
-if (!(window as Window & { __litetraceInitialized?: boolean }).__litetraceInitialized) {
-  (window as Window & { __litetraceInitialized?: boolean }).__litetraceInitialized = true;
+// Recovery injection can execute the same content script more than once on a page.
+if (!contentWindow[CONTENT_RUNTIME_FLAG]) {
+  contentWindow[CONTENT_RUNTIME_FLAG] = true;
   initialize();
 }

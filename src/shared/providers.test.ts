@@ -2,6 +2,7 @@ import {
   createGoogleRequest,
   createOpenAIRequest,
   parseOpenAITranslations,
+  resetProviderRuntimeState,
   translateTexts,
   translateTextsDetailed
 } from "./providers";
@@ -30,6 +31,7 @@ describe("provider helpers", () => {
 
   beforeEach(() => {
     storageStore = {};
+    resetProviderRuntimeState();
 
     vi.stubGlobal("chrome", {
       permissions: {
@@ -85,10 +87,43 @@ describe("provider helpers", () => {
   });
 
   it("builds openai-compatible requests", () => {
-    const request = createOpenAIRequest(["Hello"], openAISettings);
+    const request = createOpenAIRequest(["Hello"], openAISettings, "selection");
+    const requestBody = JSON.parse(request.init.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemMessage = requestBody.messages.find((message) => message.role === "system");
+    const userMessage = requestBody.messages.find((message) => message.role === "user");
+    const userPayload = JSON.parse(userMessage?.content ?? "{}") as {
+      scene?: string;
+      style?: string;
+      output?: { preserveOrder?: boolean };
+    };
+
     expect(request.url).toBe("https://api.example.com/v1/chat/completions");
     expect((request.init.headers as Record<string, string>).Authorization).toContain("openai-key");
     expect(request.init.body).not.toContain("response_format");
+    expect(systemMessage?.content).toContain("selection-based lookup");
+    expect(userPayload.scene).toBe("selection");
+    expect(userPayload.style).toContain("适合划词即看");
+    expect(userPayload.output?.preserveOrder).toBe(true);
+  });
+
+  it("builds a paragraph-oriented prompt for immersive reading", () => {
+    const request = createOpenAIRequest(["A longer paragraph."], openAISettings, "page");
+    const requestBody = JSON.parse(request.init.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemMessage = requestBody.messages.find((message) => message.role === "system");
+    const userMessage = requestBody.messages.find((message) => message.role === "user");
+    const userPayload = JSON.parse(userMessage?.content ?? "{}") as {
+      scene?: string;
+      style?: string;
+    };
+
+    expect(systemMessage?.content).toContain("immersive bilingual reading");
+    expect(systemMessage?.content).toContain("paragraph-level readability");
+    expect(userPayload.scene).toBe("page");
+    expect(userPayload.style).toContain("适合整段阅读");
   });
 
   it("adds json response_format for official openai endpoints", () => {
@@ -157,6 +192,209 @@ describe("provider helpers", () => {
     await expect(translateTexts(["Hello"], openAISettings, openAIFetcher)).resolves.toEqual([
       "你好"
     ]);
+  });
+
+  it("passes abort signals through to provider fetch requests", async () => {
+    const openAIResponse = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [{ message: { content: '{"translations":["你好"]}' } }]
+      })
+    } as unknown as Response;
+
+    const openAIFetcher = vi.fn().mockResolvedValue(openAIResponse);
+    const controller = new AbortController();
+
+    await expect(
+      translateTexts(["Hello"], openAISettings, openAIFetcher, controller.signal)
+    ).resolves.toEqual(["你好"]);
+
+    expect(openAIFetcher).toHaveBeenCalledWith(
+      "https://api.example.com/v1/chat/completions",
+      expect.objectContaining({
+        signal: controller.signal
+      })
+    );
+  });
+
+  it("retries transient 502 responses before succeeding", async () => {
+    const temporaryFailure = {
+      ok: false,
+      status: 502,
+      text: vi.fn().mockResolvedValue("")
+    } as unknown as Response;
+    const success = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [{ message: { content: '{"translations":["你好"]}' } }]
+      })
+    } as unknown as Response;
+
+    const openAIFetcher = vi
+      .fn()
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(success);
+
+    await expect(
+      translateTexts(["Hello"], openAISettings, openAIFetcher)
+    ).resolves.toEqual(["你好"]);
+    expect(openAIFetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns a friendlier message after repeated 502 responses", async () => {
+    const temporaryFailure = {
+      ok: false,
+      status: 502,
+      text: vi.fn().mockResolvedValue("")
+    } as unknown as Response;
+
+    const openAIFetcher = vi.fn().mockResolvedValue(temporaryFailure);
+
+    await expect(
+      translateTexts(["Hello"], openAISettings, openAIFetcher)
+    ).rejects.toMatchObject({
+      details: {
+        code: "PROVIDER_ERROR",
+        message: "远程翻译接口暂时不可用（502），请稍后重试。"
+      }
+    });
+    expect(openAIFetcher).toHaveBeenCalledTimes(6);
+  });
+
+  it("falls back to a minimal compatibility request after repeated provider failures", async () => {
+    const temporaryFailure = {
+      ok: false,
+      status: 502,
+      text: vi.fn().mockResolvedValue("")
+    } as unknown as Response;
+    const success = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [{ message: { content: '{"translations":["你好"]}' } }]
+      })
+    } as unknown as Response;
+
+    const openAIFetcher = vi
+      .fn()
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(success);
+
+    await expect(
+      translateTexts(["Hello"], openAISettings, openAIFetcher)
+    ).resolves.toEqual(["你好"]);
+
+    const fallbackRequestBody = JSON.parse(
+      openAIFetcher.mock.calls[3]?.[1]?.body as string
+    ) as {
+      temperature?: number;
+      response_format?: unknown;
+      messages: Array<{ role: string; content: string }>;
+    };
+
+    expect(fallbackRequestBody.temperature).toBeUndefined();
+    expect(fallbackRequestBody.response_format).toBeUndefined();
+    expect(fallbackRequestBody.messages[0]?.content).toContain("Return JSON only");
+    expect(fallbackRequestBody.messages[1]?.content).toContain("[1] Hello");
+  });
+
+  it("reuses the remembered compatibility mode so later requests skip the slow rich fallback", async () => {
+    const temporaryFailure = {
+      ok: false,
+      status: 502,
+      text: vi.fn().mockResolvedValue("")
+    } as unknown as Response;
+    const firstSuccess = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [{ message: { content: '{"translations":["你好"]}' } }]
+      })
+    } as unknown as Response;
+    const secondSuccess = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [{ message: { content: '{"translations":["世界"]}' } }]
+      })
+    } as unknown as Response;
+
+    const openAIFetcher = vi
+      .fn()
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(firstSuccess)
+      .mockResolvedValueOnce(secondSuccess);
+
+    await expect(
+      translateTexts(["Hello"], openAISettings, openAIFetcher)
+    ).resolves.toEqual(["你好"]);
+    await expect(
+      translateTexts(["World"], openAISettings, openAIFetcher)
+    ).resolves.toEqual(["世界"]);
+
+    expect(openAIFetcher).toHaveBeenCalledTimes(5);
+
+    const secondRequestBody = JSON.parse(
+      openAIFetcher.mock.calls[4]?.[1]?.body as string
+    ) as {
+      temperature?: number;
+      messages: Array<{ role: string; content: string }>;
+    };
+
+    expect(secondRequestBody.temperature).toBeUndefined();
+    expect(secondRequestBody.messages[0]?.content).toContain("Return JSON only");
+  });
+
+  it("splits page batches into smaller requests after transient provider failures", async () => {
+    const temporaryFailure = {
+      ok: false,
+      status: 502,
+      text: vi.fn().mockResolvedValue("")
+    } as unknown as Response;
+    const leftSuccess = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [{ message: { content: '{"translations":["第一段"]}' } }]
+      })
+    } as unknown as Response;
+    const rightSuccess = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [{ message: { content: '{"translations":["第二段"]}' } }]
+      })
+    } as unknown as Response;
+
+    const openAIFetcher = vi
+      .fn()
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(temporaryFailure)
+      .mockResolvedValueOnce(leftSuccess)
+      .mockResolvedValueOnce(rightSuccess);
+
+    await expect(
+      translateTextsDetailed(
+        ["First paragraph.", "Second paragraph."],
+        openAISettings,
+        openAIFetcher,
+        false,
+        undefined,
+        "page"
+      )
+    ).resolves.toEqual({
+      translations: ["第一段", "第二段"],
+      meta: {
+        cacheHits: 0,
+        requestedCount: 2,
+        networkCount: 2
+      }
+    });
+
+    expect(openAIFetcher).toHaveBeenCalledTimes(8);
   });
 
   it("reuses persistent cache before issuing a network request", async () => {
@@ -261,6 +499,37 @@ describe("provider helpers", () => {
     ]);
   });
 
+  it("rethrows abort errors instead of wrapping them as network failures", async () => {
+    const controller = new AbortController();
+    const openAIFetcher = vi.fn(
+      async (_url: URL | RequestInfo, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (init?.signal?.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+          }
+
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        })
+    );
+
+    const translationPromise = translateTexts(
+      ["Hello"],
+      openAISettings,
+      openAIFetcher,
+      controller.signal
+    );
+    queueMicrotask(() => {
+      controller.abort();
+    });
+
+    await expect(translationPromise).rejects.toMatchObject({
+      name: "AbortError"
+    });
+  });
+
   it("strips think tags from compatible api content", async () => {
     const openAIResponse = {
       ok: true,
@@ -304,16 +573,28 @@ describe("provider helpers", () => {
       })
     } as unknown as Response;
 
-    const openAIFetcher = vi
-      .fn()
-      .mockResolvedValueOnce(batchResponse)
-      .mockResolvedValueOnce(singleResponseOne)
-      .mockResolvedValueOnce(singleResponseTwo);
+    const controller = new AbortController();
+    const seenSignals: Array<AbortSignal | null | undefined> = [];
+    const responses = [batchResponse, singleResponseOne, singleResponseTwo];
+    const openAIFetcher = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => {
+      seenSignals.push(init?.signal);
+      return responses.shift() as Response;
+    });
 
     await expect(
-      translateTexts(["First sentence", "Second sentence"], openAISettings, openAIFetcher)
+      translateTexts(
+        ["First sentence", "Second sentence"],
+        openAISettings,
+        openAIFetcher,
+        controller.signal
+      )
     ).resolves.toEqual(["第一句译文", "第二句译文"]);
 
     expect(openAIFetcher).toHaveBeenCalledTimes(3);
+    expect(seenSignals).toEqual([
+      controller.signal,
+      controller.signal,
+      controller.signal
+    ]);
   });
 });

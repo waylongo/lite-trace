@@ -1,6 +1,10 @@
 import "./popup.css";
 
-import { derivePopupViewModel, type PopupMode } from "./popup-state";
+import {
+  derivePopupViewModel,
+  type PopupMode,
+  type PopupViewModel
+} from "./popup-state";
 import type { ExtensionStatus, RuntimeMessage, TranslationResponse } from "./shared/types";
 
 const popupCard = document.getElementById("popup-card") as HTMLDivElement;
@@ -13,9 +17,13 @@ const primaryButton = document.getElementById("primary-button") as HTMLButtonEle
 const secondaryButton = document.getElementById("secondary-button") as HTMLButtonElement;
 
 let currentMode: PopupMode = "unconfigured";
+let currentViewModel: PopupViewModel | null = null;
+let isRefreshingStatus = false;
+let isTogglingImmersive = false;
 
-function setBusyState(isBusy: boolean): void {
-  primaryButton.disabled = isBusy;
+function syncActionState(): void {
+  const isBusy = isRefreshingStatus || isTogglingImmersive;
+  primaryButton.disabled = isBusy || Boolean(currentViewModel?.disablePrimary);
   secondaryButton.disabled = isBusy;
 }
 
@@ -36,12 +44,12 @@ function setStatusChip(mode: PopupMode): void {
 
 function renderStatus(status: ExtensionStatus): void {
   const viewModel = derivePopupViewModel(status);
+  currentViewModel = viewModel;
   setStatusChip(viewModel.mode);
   providerLine.textContent = viewModel.providerLine;
   description.textContent = viewModel.description;
   hint.textContent = viewModel.hint;
   primaryButton.textContent = viewModel.primaryLabel;
-  primaryButton.disabled = viewModel.disablePrimary;
 
   if (viewModel.secondaryLabel) {
     secondaryButton.hidden = false;
@@ -55,10 +63,12 @@ function renderStatus(status: ExtensionStatus): void {
       ? "当前标签页暂不支持开启。"
       : ""
   );
+  syncActionState();
 }
 
 async function refreshStatus(): Promise<void> {
-  setBusyState(true);
+  isRefreshingStatus = true;
+  syncActionState();
 
   try {
     const status = (await chrome.runtime.sendMessage({
@@ -68,7 +78,8 @@ async function refreshStatus(): Promise<void> {
   } catch {
     setFeedback("状态读取失败，请重试。");
   } finally {
-    setBusyState(false);
+    isRefreshingStatus = false;
+    syncActionState();
   }
 }
 
@@ -83,7 +94,8 @@ async function handlePrimaryAction(): Promise<void> {
   }
 
   const previousMode = currentMode;
-  setBusyState(true);
+  isTogglingImmersive = true;
+  syncActionState();
   setFeedback(
     previousMode === "active"
       ? "正在关闭…"
@@ -109,7 +121,8 @@ async function handlePrimaryAction(): Promise<void> {
   } catch {
     setFeedback("操作失败，请重试。");
   } finally {
-    setBusyState(false);
+    isTogglingImmersive = false;
+    syncActionState();
   }
 }
 

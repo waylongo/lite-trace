@@ -5,6 +5,7 @@ describe("background runtime helpers", () => {
   let sendMessageMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     storageStore = {};
     sendMessageMock = vi.fn(async (_tabId: number, message: { type?: string }) => {
       if (message.type === "PING") {
@@ -46,6 +47,7 @@ describe("background runtime helpers", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -86,7 +88,7 @@ describe("background runtime helpers", () => {
     });
   });
 
-  it("fails with a specific message when the active tab cannot be reached", async () => {
+  it("retries after injecting the content script when the first message misses the receiver", async () => {
     storageStore["litetrace.settings"] = {
       activeProvider: "google",
       google: {
@@ -96,10 +98,38 @@ describe("background runtime helpers", () => {
 
     sendMessageMock
       .mockRejectedValueOnce(new Error("no receiver"))
+      .mockRejectedValueOnce(new Error("still wiring listeners"))
+      .mockResolvedValueOnce({ ok: true });
+
+    const request = triggerActiveTabImmersive();
+
+    await vi.runAllTimersAsync();
+
+    await expect(request).resolves.toEqual({ ok: true });
+    expect(sendMessageMock).toHaveBeenCalledWith(99, {
+      type: "TOGGLE_IMMERSIVE_TRANSLATION"
+    });
+  });
+
+  it("fails with a softer reconnect message when the page still cannot be reached", async () => {
+    storageStore["litetrace.settings"] = {
+      activeProvider: "google",
+      google: {
+        apiKey: "demo-key"
+      }
+    };
+
+    sendMessageMock
+      .mockRejectedValueOnce(new Error("no receiver"))
+      .mockRejectedValueOnce(new Error("still no receiver"))
+      .mockRejectedValueOnce(new Error("still no receiver"))
       .mockRejectedValueOnce(new Error("still no receiver"));
 
-    await expect(triggerActiveTabImmersive()).rejects.toThrow(
-      "LiteTrace 没有成功注入当前页面，请刷新页面后再试一次。"
+    const request = expect(triggerActiveTabImmersive()).rejects.toThrow(
+      "当前页面没有成功连接 LiteTrace，请稍后重试。"
     );
+
+    await vi.runAllTimersAsync();
+    await request;
   });
 });

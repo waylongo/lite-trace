@@ -3,18 +3,19 @@ import {
   getCachedTranslations,
   setCachedTranslations
 } from "./translation-cache";
-import {
-  mapTranslationConcurrency,
-  normalizeTranslationText
-} from "./translation-runtime";
+import { normalizeTranslationText } from "./translation-runtime";
 import type {
   ExtensionSettings,
   TranslationError,
-  TranslationMeta
+  TranslationMeta,
+  TranslationScene
 } from "./types";
 
 const GOOGLE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2";
 const SINGLE_FALLBACK_CONCURRENCY = 4;
+const TRANSIENT_RETRY_DELAYS_MS = [300, 900] as const;
+const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const openAICompatibilityModeCache = new Map<string, "rich" | "compat-minimal">();
 
 interface MissingTextGroup {
   text: string;
@@ -31,6 +32,122 @@ interface TranslationExecutionResult {
   meta: TranslationMeta;
 }
 
+function buildOpenAICompatibilityCacheKey(settings: ExtensionSettings): string {
+  return [
+    normalizeOpenAIBaseUrl(settings.openai.baseUrl),
+    settings.openai.model.trim()
+  ].join("\u241F");
+}
+
+async function mapWithConcurrency<T, TResult>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<TResult>
+): Promise<TResult[]> {
+  const limit = Math.max(1, concurrency);
+  const results = new Array<TResult>(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const currentIndex = nextIndex;
+
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  );
+
+  return results;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+function isRetryableStatus(status: number): boolean {
+  return TRANSIENT_HTTP_STATUSES.has(status);
+}
+
+function isRetryableFetchError(error: unknown): boolean {
+  return error instanceof TypeError && !isAbortError(error);
+}
+
+function isTransientProviderFailureMessage(message: string): boolean {
+  return (
+    /暂时不可用（(?:408|429|500|502|503|504)）/.test(message) ||
+    /请求过多/.test(message) ||
+    /远程接口返回错误状态 (?:408|429|500|502|503|504)/.test(message)
+  );
+}
+
+async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
+
+    const onAbort = (): void => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    const cleanup = (): void => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+async function fetchWithTransientRetry(
+  url: string,
+  init: RequestInit,
+  fetcher: typeof fetch,
+  signal?: AbortSignal
+): Promise<Response> {
+  for (let attempt = 0; attempt <= TRANSIENT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetcher(url, {
+        ...init,
+        signal
+      });
+
+      if (response.ok || !isRetryableStatus(response.status) || attempt === TRANSIENT_RETRY_DELAYS_MS.length) {
+        return response;
+      }
+
+      await response.text().catch(() => "");
+    } catch (error) {
+      if (!isRetryableFetchError(error) || attempt === TRANSIENT_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+    }
+
+    await waitForRetry(TRANSIENT_RETRY_DELAYS_MS[attempt] ?? 0, signal);
+  }
+
+  throw new Error("网络请求失败，请稍后重试。");
+}
+
 export class TranslationProviderError extends Error {
   readonly details: TranslationError;
 
@@ -39,6 +156,10 @@ export class TranslationProviderError extends Error {
     this.name = "TranslationProviderError";
     this.details = details;
   }
+}
+
+export function resetProviderRuntimeState(): void {
+  openAICompatibilityModeCache.clear();
 }
 
 export function createGoogleRequest(texts: string[], settings: ExtensionSettings) {
@@ -61,29 +182,95 @@ export function createGoogleRequest(texts: string[], settings: ExtensionSettings
   };
 }
 
-export function createOpenAIRequest(texts: string[], settings: ExtensionSettings) {
+function buildOpenAISystemPrompt(scene: TranslationScene): string {
+  if (scene === "selection") {
+    return [
+      "You are an expert English-to-Simplified-Chinese translation engine for selection-based lookup.",
+      "The user has actively highlighted a word, phrase, sentence, or short passage and wants an immediate, native-sounding Chinese rendering.",
+      "Produce faithful, fluent, and idiomatic Simplified Chinese.",
+      "For words, short phrases, titles, and UI text, prefer concise and natural Chinese phrasing instead of stiff literal translation.",
+      "For sentences, preserve the original meaning, tone, names, brands, numbers, units, and technical terms.",
+      "Do not add explanations, notes, examples, transliteration, or dictionary labels unless they already appear in the source text.",
+      'Return only JSON in the exact shape {"translations":["..."]}.',
+      "Keep the same item order and item count as the input.",
+      "Do not output reasoning, notes, analysis, markdown fences, or extra commentary."
+    ].join(" ");
+  }
+
+  return [
+    "You are an expert English-to-Simplified-Chinese translation engine for immersive bilingual reading.",
+    "Translate each passage into fluent, idiomatic Simplified Chinese that reads naturally for native Chinese readers.",
+    "Preserve meaning, tone, structure, names, brands, numbers, units, and technical terminology.",
+    "Prefer smooth Chinese sentence flow over rigid word-for-word mirroring, but do not add or omit meaning.",
+    "Keep paragraph-level readability strong so the translation can sit directly under the original text for side-by-side reading.",
+    'Return only JSON in the exact shape {"translations":["..."]}.',
+    "Keep the same item order and item count as the input.",
+    "Do not output reasoning, notes, analysis, markdown fences, or extra commentary."
+  ].join(" ");
+}
+
+export function createOpenAIRequest(
+  texts: string[],
+  settings: ExtensionSettings,
+  scene: TranslationScene = "selection",
+  mode: "rich" | "compat-minimal" = "rich"
+) {
   const baseUrl = normalizeOpenAIBaseUrl(settings.openai.baseUrl);
+  const userContent =
+    mode === "compat-minimal"
+      ? [
+          `targetLanguage: ${settings.preferences.targetLang}`,
+          `scene: ${scene}`,
+          `count: ${texts.length}`,
+          "texts:",
+          ...texts.map((text, index) => `[${index + 1}] ${text}`)
+        ].join("\n")
+      : JSON.stringify({
+          scene,
+          targetLanguage: settings.preferences.targetLang,
+          audience: "简体中文母语读者",
+          style:
+            scene === "selection"
+              ? "适合划词即看，忠实原意、简洁自然、避免生硬直译"
+              : "适合整段阅读，忠实原意、自然流畅、符合中文表达习惯",
+          output: {
+            format: "json",
+            schema: {
+              translations: ["string"]
+            },
+            preserveOrder: true,
+            preserveCount: true
+          },
+          count: texts.length,
+          texts
+        });
   const requestBody: Record<string, unknown> = {
     model: settings.openai.model,
-    temperature: 0.1,
     messages: [
       {
         role: "system",
         content:
-          "You are a translation engine. Translate English text into Simplified Chinese. Return only the final translation result. Prefer strict JSON in the shape {\"translations\":[\"...\"]}. Do not output reasoning, analysis, <think> tags, markdown fences, or extra commentary."
+          mode === "compat-minimal"
+            ? [
+                "Translate English text into natural Simplified Chinese.",
+                "Return JSON only in the exact shape {\"translations\":[\"...\"]}.",
+                "Keep the same item order and item count as the input.",
+                "Do not output reasoning or extra commentary."
+              ].join(" ")
+            : buildOpenAISystemPrompt(scene)
       },
       {
         role: "user",
-        content: JSON.stringify({
-          targetLanguage: settings.preferences.targetLang,
-          count: texts.length,
-          texts
-        })
+        content: userContent
       }
     ]
   };
 
-  if (supportsJsonResponseFormat(baseUrl)) {
+  if (mode === "rich") {
+    requestBody.temperature = 0.1;
+  }
+
+  if (mode === "rich" && supportsJsonResponseFormat(baseUrl)) {
     requestBody.response_format = {
       type: "json_object"
     };
@@ -100,6 +287,52 @@ export function createOpenAIRequest(texts: string[], settings: ExtensionSettings
       body: JSON.stringify(requestBody)
     } satisfies RequestInit
   };
+}
+
+function shouldUseCompatibilityFallback(
+  baseUrl: string,
+  error: unknown
+): boolean {
+  if (supportsJsonResponseFormat(baseUrl)) {
+    return false;
+  }
+
+  if (isRetryableFetchError(error)) {
+    return true;
+  }
+
+  return (
+    error instanceof TranslationProviderError &&
+    (error.details.code === "PROVIDER_ERROR" ||
+      error.details.code === "NETWORK_ERROR" ||
+      error.details.code === "PARSE_ERROR")
+  );
+}
+
+function getPreferredOpenAIRequestMode(
+  settings: ExtensionSettings
+): "rich" | "compat-minimal" {
+  if (supportsJsonResponseFormat(normalizeOpenAIBaseUrl(settings.openai.baseUrl))) {
+    return "rich";
+  }
+
+  return (
+    openAICompatibilityModeCache.get(buildOpenAICompatibilityCacheKey(settings)) ?? "rich"
+  );
+}
+
+function rememberOpenAIRequestMode(
+  settings: ExtensionSettings,
+  mode: "rich" | "compat-minimal"
+): void {
+  if (supportsJsonResponseFormat(normalizeOpenAIBaseUrl(settings.openai.baseUrl))) {
+    return;
+  }
+
+  openAICompatibilityModeCache.set(
+    buildOpenAICompatibilityCacheKey(settings),
+    mode
+  );
 }
 
 function throwProviderError(
@@ -306,9 +539,17 @@ async function ensureResponseOk(response: Response): Promise<void> {
   }
 
   const errorText = await response.text();
+  const message =
+    errorText ||
+    (response.status === 502 || response.status === 503 || response.status === 504
+      ? `远程翻译接口暂时不可用（${response.status}），请稍后重试。`
+      : response.status === 429
+        ? "远程翻译接口当前请求过多，请稍后重试。"
+        : `远程接口返回错误状态 ${response.status}。`);
+
   throwProviderError(
     "PROVIDER_ERROR",
-    errorText || `远程接口返回错误状态 ${response.status}。`
+    message
   );
 }
 
@@ -371,31 +612,65 @@ async function ensureProviderPermission(
 async function requestOpenAIMessageContent(
   texts: string[],
   settings: ExtensionSettings,
-  fetcher: typeof fetch
+  scene: TranslationScene,
+  fetcher: typeof fetch,
+  signal?: AbortSignal
 ): Promise<string> {
-  const request = createOpenAIRequest(texts, settings);
-  const response = await fetcher(request.url, request.init);
-  await ensureResponseOk(response);
+  async function requestWithMode(mode: "rich" | "compat-minimal"): Promise<string> {
+    const request = createOpenAIRequest(texts, settings, scene, mode);
+    const response = await fetchWithTransientRetry(
+      request.url,
+      request.init,
+      fetcher,
+      signal
+    );
+    await ensureResponseOk(response);
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: unknown } }>;
-  };
-  const content = extractOpenAIMessageContent(data.choices?.[0]?.message?.content);
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: unknown } }>;
+    };
+    const content = extractOpenAIMessageContent(data.choices?.[0]?.message?.content);
 
-  if (!content) {
-    throwProviderError("PARSE_ERROR", "LLM 未返回可解析的译文内容。");
+    if (!content) {
+      throwProviderError("PARSE_ERROR", "LLM 未返回可解析的译文内容。");
+    }
+
+    return content;
   }
 
-  return content;
+  const preferredMode = getPreferredOpenAIRequestMode(settings);
+
+  try {
+    const content = await requestWithMode(preferredMode);
+    rememberOpenAIRequestMode(settings, preferredMode);
+    return content;
+  } catch (error) {
+    if (
+      preferredMode === "compat-minimal" ||
+      !shouldUseCompatibilityFallback(normalizeOpenAIBaseUrl(settings.openai.baseUrl), error)
+    ) {
+      throw error;
+    }
+
+    const content = await requestWithMode("compat-minimal");
+    rememberOpenAIRequestMode(settings, "compat-minimal");
+    return content;
+  }
 }
 
 async function requestGoogleTranslations(
   texts: string[],
   settings: ExtensionSettings,
-  fetcher: typeof fetch
+  fetcher: typeof fetch,
+  signal?: AbortSignal
 ): Promise<RemoteTranslationResult> {
   const request = createGoogleRequest(texts, settings);
-  const response = await fetcher(request.url, request.init);
+  const response = await fetchWithTransientRetry(
+    request.url,
+    request.init,
+    fetcher,
+    signal
+  );
   await ensureResponseOk(response);
 
   const data = (await response.json()) as {
@@ -422,11 +697,19 @@ async function requestGoogleTranslations(
 async function translateOpenAITexts(
   texts: string[],
   settings: ExtensionSettings,
+  scene: TranslationScene,
   fetcher: typeof fetch,
-  permissionsChecked = false
+  permissionsChecked = false,
+  signal?: AbortSignal
 ): Promise<RemoteTranslationResult> {
   try {
-    const content = await requestOpenAIMessageContent(texts, settings, fetcher);
+    const content = await requestOpenAIMessageContent(
+      texts,
+      settings,
+      scene,
+      fetcher,
+      signal
+    );
     return {
       translations: parseOpenAITranslations(content, texts.length),
       meta: {
@@ -440,7 +723,7 @@ async function translateOpenAITexts(
       error.details.code === "PARSE_ERROR" &&
       texts.length > 1
     ) {
-      const singleResults = await mapTranslationConcurrency(
+      const singleResults = await mapWithConcurrency(
         texts,
         SINGLE_FALLBACK_CONCURRENCY,
         async (text) =>
@@ -448,7 +731,9 @@ async function translateOpenAITexts(
             [text],
             settings,
             fetcher,
-            permissionsChecked
+            permissionsChecked,
+            signal,
+            scene
           )
       );
 
@@ -471,11 +756,106 @@ async function translateOpenAITexts(
   }
 }
 
+function shouldSplitBatchOnFailure(
+  error: unknown,
+  texts: string[],
+  scene: TranslationScene
+): boolean {
+  if (scene !== "page" || texts.length <= 1 || isAbortError(error)) {
+    return false;
+  }
+
+  if (isRetryableFetchError(error)) {
+    return true;
+  }
+
+  return (
+    error instanceof TranslationProviderError &&
+    error.details.code === "PROVIDER_ERROR" &&
+    isTransientProviderFailureMessage(error.details.message)
+  );
+}
+
+async function requestRemoteTranslations(
+  texts: string[],
+  settings: ExtensionSettings,
+  scene: TranslationScene,
+  fetcher: typeof fetch,
+  permissionsChecked: boolean,
+  signal?: AbortSignal
+): Promise<RemoteTranslationResult> {
+  return settings.activeProvider === "google"
+    ? await requestGoogleTranslations(texts, settings, fetcher, signal)
+    : await translateOpenAITexts(
+        texts,
+        settings,
+        scene,
+        fetcher,
+        permissionsChecked,
+        signal
+      );
+}
+
+async function requestRemoteTranslationsWithBatchFallback(
+  texts: string[],
+  settings: ExtensionSettings,
+  scene: TranslationScene,
+  fetcher: typeof fetch,
+  permissionsChecked: boolean,
+  signal?: AbortSignal
+): Promise<RemoteTranslationResult> {
+  try {
+    return await requestRemoteTranslations(
+      texts,
+      settings,
+      scene,
+      fetcher,
+      permissionsChecked,
+      signal
+    );
+  } catch (error) {
+    if (!shouldSplitBatchOnFailure(error, texts, scene)) {
+      throw error;
+    }
+
+    const middle = Math.ceil(texts.length / 2);
+    const leftTexts = texts.slice(0, middle);
+    const rightTexts = texts.slice(middle);
+
+    const leftResult = await requestRemoteTranslationsWithBatchFallback(
+      leftTexts,
+      settings,
+      scene,
+      fetcher,
+      permissionsChecked,
+      signal
+    );
+    const rightResult = await requestRemoteTranslationsWithBatchFallback(
+      rightTexts,
+      settings,
+      scene,
+      fetcher,
+      permissionsChecked,
+      signal
+    );
+
+    return {
+      translations: [...leftResult.translations, ...rightResult.translations],
+      meta: {
+        cacheHits: leftResult.meta.cacheHits + rightResult.meta.cacheHits,
+        networkCount: leftResult.meta.networkCount + rightResult.meta.networkCount
+      }
+    };
+  }
+}
+
 export async function translateTextsDetailed(
   texts: string[],
   settings: ExtensionSettings,
   fetcher: typeof fetch = fetch,
-  permissionsChecked = false
+  permissionsChecked = false,
+  signal?: AbortSignal,
+  scene: TranslationScene = "selection"
 ): Promise<TranslationExecutionResult> {
   if (!permissionsChecked) {
     await ensureProviderPermission(settings);
@@ -498,15 +878,14 @@ export async function translateTextsDetailed(
     }
 
     const missingTexts = missingGroups.map((group) => group.text);
-    const remoteResult =
-      settings.activeProvider === "google"
-        ? await requestGoogleTranslations(missingTexts, settings, fetcher)
-        : await translateOpenAITexts(
-            missingTexts,
-            settings,
-            fetcher,
-            true
-          );
+    const remoteResult = await requestRemoteTranslationsWithBatchFallback(
+      missingTexts,
+      settings,
+      scene,
+      fetcher,
+      true,
+      signal
+    );
 
     missingGroups.forEach((group, index) => {
       const translation = remoteResult.translations[index];
@@ -541,6 +920,10 @@ export async function translateTextsDetailed(
       throw error;
     }
 
+    if (isAbortError(error)) {
+      throw error;
+    }
+
     if (error instanceof TypeError) {
       throwProviderError("NETWORK_ERROR", "网络请求失败，请检查接口地址、权限或网络状态。");
     }
@@ -552,8 +935,17 @@ export async function translateTextsDetailed(
 export async function translateTexts(
   texts: string[],
   settings: ExtensionSettings,
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+  scene: TranslationScene = "selection"
 ): Promise<string[]> {
-  const result = await translateTextsDetailed(texts, settings, fetcher);
+  const result = await translateTextsDetailed(
+    texts,
+    settings,
+    fetcher,
+    false,
+    signal,
+    scene
+  );
   return result.translations;
 }

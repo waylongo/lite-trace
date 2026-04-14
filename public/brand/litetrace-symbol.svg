@@ -9,16 +9,16 @@
       <stop offset="1" stop-color="#124B84" />
     </linearGradient>
   </defs>
-  <rect x="24" y="24" width="208" height="208" rx="52" fill="url(#tileGradientV2)" />
-  <rect x="46" y="46" width="164" height="164" rx="34" fill="#F8F7F2" fill-opacity="0.96" />
-  <rect x="126" y="72" width="4" height="112" rx="2" fill="#D6E4DB" />
-  <rect x="66" y="76" width="44" height="14" rx="7" fill="#8EA094" />
-  <rect x="66" y="102" width="34" height="14" rx="7" fill="#A3B1A8" />
-  <rect x="66" y="128" width="48" height="14" rx="7" fill="#8EA094" />
-  <rect x="66" y="154" width="28" height="14" rx="7" fill="#A3B1A8" />
-  <rect x="144" y="76" width="46" height="14" rx="7" fill="url(#translationGradientV2)" />
-  <rect x="144" y="102" width="34" height="14" rx="7" fill="url(#translationGradientV2)" fill-opacity="0.9" />
-  <rect x="144" y="128" width="44" height="14" rx="7" fill="url(#translationGradientV2)" />
-  <rect x="144" y="154" width="24" height="14" rx="7" fill="url(#translationGradientV2)" fill-opacity="0.9" />
-  <rect x="58" y="58" width="140" height="140" rx="26" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="2" />
+  <rect x="18" y="18" width="220" height="220" rx="56" fill="url(#tileGradientV2)" />
+  <rect x="37" y="37" width="182" height="182" rx="38" fill="#F8F7F2" fill-opacity="0.96" />
+  <rect x="126" y="65" width="4" height="126" rx="2" fill="#D6E4DB" />
+  <rect x="56" y="69" width="48" height="16" rx="8" fill="#8EA094" />
+  <rect x="56" y="99" width="38" height="16" rx="8" fill="#A3B1A8" />
+  <rect x="56" y="129" width="52" height="16" rx="8" fill="#8EA094" />
+  <rect x="56" y="159" width="30" height="16" rx="8" fill="#A3B1A8" />
+  <rect x="144" y="69" width="50" height="16" rx="8" fill="url(#translationGradientV2)" />
+  <rect x="144" y="99" width="38" height="16" rx="8" fill="url(#translationGradientV2)" fill-opacity="0.9" />
+  <rect x="144" y="129" width="48" height="16" rx="8" fill="url(#translationGradientV2)" />
+  <rect x="144" y="159" width="28" height="16" rx="8" fill="url(#translationGradientV2)" fill-opacity="0.9" />
+  <rect x="49" y="49" width="158" height="158" rx="31" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="2" />
 </svg>

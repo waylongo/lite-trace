@@ -9,9 +9,9 @@ import {
 } from "./shared/providers";
 import { getSettings, saveSettings } from "./shared/storage";
 import {
-  ensureContentScript,
   getExtensionStatus,
-  triggerActiveTabImmersive
+  triggerActiveTabImmersive,
+  triggerTabSelectionTranslation
 } from "./background-runtime";
 import type {
   ExtensionSettings,
@@ -19,22 +19,81 @@ import type {
   RuntimeMessage,
   TranslationFailure,
   TranslationMeta,
-  TranslationResponse
+  TranslationResponse,
+  TranslationScene
 } from "./shared/types";
 
-const MENU_ID = "litetrace-open-options";
+const ACTION_MENU_ID = "litetrace-open-options";
+const SELECTION_MENU_ID = "litetrace-translate-selection";
 const requestCache = new Map<
   string,
   Promise<{ translations: string[]; meta: TranslationMeta }>
 >();
+const immersiveRequestControllers = new Map<string, Set<AbortController>>();
 
-function buildCacheKey(settings: ExtensionSettings, texts: string[]): string {
-  return JSON.stringify({
-    provider: settings.activeProvider,
-    baseUrl: settings.openai.baseUrl,
-    model: settings.openai.model,
-    texts
-  });
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+function buildImmersiveRequestKey(
+  sender: chrome.runtime.MessageSender,
+  immersiveJobId: number
+): string | null {
+  return typeof sender.tab?.id === "number"
+    ? `${sender.tab.id}:${immersiveJobId}`
+    : null;
+}
+
+function registerImmersiveController(
+  requestKey: string,
+  controller: AbortController
+): void {
+  const existing = immersiveRequestControllers.get(requestKey);
+
+  if (existing) {
+    existing.add(controller);
+    return;
+  }
+
+  immersiveRequestControllers.set(requestKey, new Set([controller]));
+}
+
+function unregisterImmersiveController(
+  requestKey: string,
+  controller: AbortController
+): void {
+  const controllers = immersiveRequestControllers.get(requestKey);
+
+  if (!controllers) {
+    return;
+  }
+
+  controllers.delete(controller);
+
+  if (controllers.size === 0) {
+    immersiveRequestControllers.delete(requestKey);
+  }
+}
+
+function cancelImmersiveControllers(requestKey: string | null): void {
+  if (!requestKey) {
+    return;
+  }
+
+  const controllers = immersiveRequestControllers.get(requestKey);
+
+  if (!controllers) {
+    return;
+  }
+
+  immersiveRequestControllers.delete(requestKey);
+
+  for (const controller of controllers) {
+    controller.abort();
+  }
 }
 
 function toFailure(error: unknown): TranslationFailure {
@@ -85,23 +144,53 @@ async function resolveSettings(
 
 async function handleTranslation(
   texts: string[],
-  settingsOverride?: ExtensionSettings
+  scene: TranslationScene,
+  settingsOverride?: ExtensionSettings,
+  signal?: AbortSignal,
+  useRequestCache = true
 ): Promise<TranslationResponse> {
   try {
     const settings = await resolveSettings(settingsOverride);
-    const cacheKey = buildCacheKey(settings, texts);
+    const cacheKey = useRequestCache
+      ? JSON.stringify({
+          provider: settings.activeProvider,
+          baseUrl: settings.openai.baseUrl,
+          model: settings.openai.model,
+          scene,
+          texts
+        })
+      : null;
 
-    const cachedRequest = requestCache.get(cacheKey);
-    if (cachedRequest) {
-      const cachedResult = await cachedRequest;
+    if (cacheKey) {
+      const cachedRequest = requestCache.get(cacheKey);
+      if (cachedRequest) {
+        const cachedResult = await cachedRequest;
+        return {
+          ok: true,
+          translations: cachedResult.translations,
+          meta: cachedResult.meta
+        };
+      }
+    }
+
+    const pending = translateTextsDetailed(
+      texts,
+      settings,
+      fetch,
+      false,
+      signal,
+      scene
+    );
+
+    if (!cacheKey) {
+      const result = await pending;
       return {
         ok: true,
-        translations: cachedResult.translations,
-        meta: cachedResult.meta
+        translations: result.translations,
+        meta: result.meta
       };
     }
 
-    const pending = translateTextsDetailed(texts, settings);
     requestCache.set(cacheKey, pending);
 
     try {
@@ -115,7 +204,43 @@ async function handleTranslation(
       requestCache.delete(cacheKey);
     }
   } catch (error) {
+    if (isAbortError(error)) {
+      return toFailure(new Error("翻译已取消。"));
+    }
+
     return toFailure(error);
+  }
+}
+
+async function handleImmersiveTranslation(
+  texts: string[],
+  sender: chrome.runtime.MessageSender,
+  settingsOverride?: ExtensionSettings,
+  immersiveJobId?: number
+): Promise<TranslationResponse> {
+  if (typeof immersiveJobId !== "number") {
+    return handleTranslation(texts, "page", settingsOverride);
+  }
+
+  const requestKey = buildImmersiveRequestKey(sender, immersiveJobId);
+
+  if (!requestKey) {
+    return handleTranslation(texts, "page", settingsOverride);
+  }
+
+  const controller = new AbortController();
+  registerImmersiveController(requestKey, controller);
+
+  try {
+    return await handleTranslation(
+      texts,
+      "page",
+      settingsOverride,
+      controller.signal,
+      false
+    );
+  } finally {
+    unregisterImmersiveController(requestKey, controller);
   }
 }
 
@@ -139,32 +264,46 @@ async function markReadingCoachmarkSeen(): Promise<{ ok: true }> {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
-      id: MENU_ID,
+      id: ACTION_MENU_ID,
       title: "打开浅译设置",
       contexts: ["action"]
+    });
+    chrome.contextMenus.create({
+      id: SELECTION_MENU_ID,
+      title: "翻译所选内容",
+      contexts: ["selection"]
     });
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info) => {
-  if (info.menuItemId === MENU_ID) {
-    chrome.runtime.openOptionsPage();
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === ACTION_MENU_ID) {
+    void chrome.runtime.openOptionsPage();
+    return;
+  }
+
+  if (info.menuItemId === SELECTION_MENU_ID && typeof tab?.id === "number") {
+    void triggerTabSelectionTranslation(tab.id, info.selectionText).catch(() => {
+      // Ignore menu-trigger transport failures; the content script handles in-page feedback.
+    });
   }
 });
 
 chrome.runtime.onMessage.addListener(
   (
     message: RuntimeMessage,
-    _sender,
+    sender,
     sendResponse: (response?: unknown) => void
   ) => {
     void (async () => {
       switch (message.type) {
         case "TRANSLATE_PAGE_BLOCKS": {
           sendResponse(
-            await handleTranslation(
+            await handleImmersiveTranslation(
               message.payload.texts,
-              message.payload.settingsOverride
+              sender,
+              message.payload.settingsOverride,
+              message.payload.immersiveJobId
             )
           );
           return;
@@ -174,9 +313,18 @@ chrome.runtime.onMessage.addListener(
           sendResponse(
             await handleTranslation(
               message.payload.texts,
+              "selection",
               message.payload.settingsOverride
             )
           );
+          return;
+        }
+
+        case "CANCEL_IMMERSIVE_TRANSLATION": {
+          cancelImmersiveControllers(
+            buildImmersiveRequestKey(sender, message.payload.immersiveJobId)
+          );
+          sendResponse({ ok: true });
           return;
         }
 

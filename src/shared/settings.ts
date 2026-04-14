@@ -1,6 +1,9 @@
 import {
   DEFAULT_SETTINGS,
   type ExtensionSettings,
+  type GoogleSettings,
+  type OpenAISettings,
+  type PreferencesSettings,
   type ProviderKind
 } from "./types";
 
@@ -54,7 +57,6 @@ export function sanitizeSettings(rawValue: unknown): ExtensionSettings {
     },
     preferences: {
       targetLang: "zh-CN",
-      selectionUi: "auto-popup",
       pageScope: "static-content",
       hasCompletedSetup: Boolean(preferencesSource.hasCompletedSetup),
       hasSeenReadingCoachmark: Boolean(preferencesSource.hasSeenReadingCoachmark)
@@ -64,7 +66,11 @@ export function sanitizeSettings(rawValue: unknown): ExtensionSettings {
 
 export function mergeSettings(
   rawValue: unknown,
-  overrides?: Partial<ExtensionSettings>
+  overrides?: Omit<Partial<ExtensionSettings>, "google" | "openai" | "preferences"> & {
+    google?: Partial<GoogleSettings>;
+    openai?: Partial<OpenAISettings>;
+    preferences?: Partial<PreferencesSettings>;
+  }
 ): ExtensionSettings {
   const sanitized = sanitizeSettings(rawValue);
 

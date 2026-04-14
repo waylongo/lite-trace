@@ -116,6 +116,9 @@ src/
   - `vite.config.ts`
   - `public/manifest.json`
   - 对应 HTML/TS 入口文件
+- `content.js` 必须保持为可直接注入页面的单文件 classic script；不要让它依赖额外 runtime chunk，也不要让产物出现顶层 `import` / `export`。
+  - 原因：Manifest `content_scripts` 与 `chrome.scripting.executeScript()` 注入的 `content.js` 会按经典脚本执行，一旦被 Vite / Rollup 抽出共享 chunk，就会在页面报 `Cannot use import statement outside a module`，随后表现成“当前页面没有成功连接 LiteTrace”。
+  - 涉及 `src/content.ts`、共享工具抽取、构建拆包策略时，宁可保留少量重复实现，也优先保证 `dist/content.js` 独立可执行。
 
 ### 测试约定
 
@@ -128,6 +131,7 @@ src/
   - `npm run typecheck`
   - `npm test`
   - `npm run build`
+  - 构建后检查 `dist/content.js` 开头不含顶层 `import` / `export`
 
 ## 已知约束与注意事项
 
@@ -151,4 +155,5 @@ src/
 - 相关源码、类型、消息链路已经同步更新
 - 相关测试通过，或明确说明缺失的测试覆盖
 - `typecheck`、`test`、`build` 通过
+- `dist/content.js` 仍然是单文件可执行 content script，没有顶层 `import` / `export`
 - 没有把 `dist/`、`node_modules/`、密钥或本地垃圾文件提交进仓库
