@@ -1,80 +1,28 @@
 # LiteTrace
 
-LiteTrace 是一个面向技术阅读的 Chrome 翻译扩展。它支持接入你自己的大模型 API，并用本地术语记忆保持关键概念翻译一致，让英文网页更适合长期阅读和反复查阅。
+LiteTrace（浅译）是一款面向英文技术阅读的 Chrome 双语翻译插件。
 
-它提供两种阅读体验：
+它适合用来阅读技术文档、博客、论文摘要、教程和产品说明。你可以接入自己的 OpenAI Compatible / LLM API，在网页里生成中英双语对照；也可以维护一个本地术语库，让 API、框架名、产品概念和专业词汇保持稳定译法。
 
-- 沉浸式双语阅读：扫描页面中的英文正文块，在原文后插入中文译文
-- 划词翻译：选中文本后，在页面内弹出中文结果
+![LiteTrace 双语阅读截图](./screenshots/1.png)
 
-当前主要面向简体中文用户，支持两类翻译提供商：
+## 核心功能
 
-- OpenAI 兼容接口：推荐用于技术长文和术语一致性场景
-- Google Translate API：可作为简单直接的备选
+- **接入自己的大模型 API**：支持 OpenAI Compatible 接口，自行配置 Base URL、模型和 API Key。
+- **本地术语记忆**：选中英文后右键加入术语，后续 LLM 翻译会优先使用命中的术语译法。
+- **沉浸式双语阅读**：在网页正文后插入中文译文，保留原文上下文。
+- **划词翻译**：选中文本后，通过页面内 icon 快速查看局部翻译。
+- **即时修正当前页**：保存新术语后，当前页面里相关的已译段落会自动重译。
+- **Google Translate 备选**：不需要 LLM 时，也可以切换到 Google Translate API。
 
-## 特性
+## 为什么做它
 
-- 沉浸式段落级双语阅读
-- 页内划词翻译，不依赖浏览器原生 tooltip
-- 接入自己的 OpenAI Compatible / LLM API，不绑定 LiteTrace 自有云服务
-- 本地术语库：选中英文后右键加入术语，LLM 翻译时按命中术语保持译法一致
-- 当前页即时修正：保存术语后，相关已译段落会自动重译
-- Google / OpenAI 兼容翻译引擎切换
-- 翻译缓存、失败重试、兼容模式回退
-- Chrome Manifest V3 兼容
+读英文技术长文时，难点不只是翻译一句话，而是连续读下来不被打断。
 
-## 本地开发
+LiteTrace 用双语对照降低阅读成本，再用本地术语库固定关键概念的译法。你也可以接入自己的大模型 API，把翻译质量、费用和数据流向掌握在自己手里。
 
-```bash
-npm install
-npm run dev
-```
+## 隐私
 
-开发时会持续输出到 `dist/`，然后在 Chrome 扩展管理页加载 `dist/` 目录调试。
+LiteTrace 不提供自有云端翻译服务，也不会收集或托管你的 API Key。本仓库开源所有代码，方便你检查扩展如何处理本地配置、术语和翻译请求。
 
-常用命令：
-
-```bash
-npm run typecheck
-npm test
-npm run build
-```
-
-## 发布前检查
-
-推荐直接执行：
-
-```bash
-npm run release:check
-```
-
-它会依次执行：
-
-- `npm run typecheck`
-- `npm test`
-- `npm run build`
-- 构建产物校验
-
-当前构建产物校验会重点检查：
-
-- `package.json` 与 `public/manifest.json` 版本号一致
-- `dist/background.js`、`dist/content.js`、`dist/popup.html`、`dist/options.html` 存在
-- `public/manifest.json` 仍然声明 `content.js` 为 content script
-- `dist/content.js` 不包含顶层 `import` / `export`
-
-最后一条是发布红线：Chrome 会把 content script 按 classic script 执行。如果 `dist/content.js` 被打成模块脚本，就会直接报 `Cannot use import statement outside a module`，随后表现成“当前页面没有成功连接 LiteTrace”。
-
-## 配置说明
-
-- Google 模式需要用户自己的 Google Translate API Key
-- OpenAI 兼容模式需要用户自己的 Base URL、模型名和 API Key
-- 配置保存在用户本地的 `chrome.storage.local`
-- 术语库同样保存在本地；只有命中当前文本的启用术语会随 OpenAI 兼容接口翻译请求发送给用户配置的 LLM provider
-- Google Translate 模式可以维护术语库，但不会强制套用术语
-
-## 隐私说明
-
-- LiteTrace 不在仓库中存储用户 API Key
-- 用户选中的文本或页面中待翻译的英文内容，只会发送到用户自己配置的翻译提供商
-- 启用的术语仅在命中当前翻译文本时随 LLM 请求发送
-- 详细说明见 [PRIVACY.md](./PRIVACY.md)
+用户选中的文本、网页中待翻译的英文内容，以及命中的启用术语，只会发送到你自己配置的翻译提供商。详细说明见 [PRIVACY.md](./PRIVACY.md)。
