@@ -8,8 +8,16 @@ import {
   validateSettings
 } from "./shared/settings";
 import { getSettings, saveSettings } from "./shared/storage";
+import {
+  deleteGlossaryTerm,
+  getGlossaryTerms,
+  toggleGlossaryTerm,
+  updateGlossaryTerm,
+  upsertGlossaryTerm
+} from "./shared/glossary";
 import type {
   ExtensionSettings,
+  GlossaryTerm,
   RuntimeMessage,
   TranslationResponse
 } from "./shared/types";
@@ -38,11 +46,28 @@ const googleApiKeyInput = document.getElementById("google-api-key") as HTMLInput
 const openAIBaseUrlInput = document.getElementById("openai-base-url") as HTMLInputElement;
 const openAIModelInput = document.getElementById("openai-model") as HTMLInputElement;
 const openAIApiKeyInput = document.getElementById("openai-api-key") as HTMLInputElement;
+const glossarySourceInput = document.getElementById(
+  "glossary-source-input"
+) as HTMLInputElement;
+const glossaryTargetInput = document.getElementById(
+  "glossary-target-input"
+) as HTMLInputElement;
+const glossaryAddButton = document.getElementById(
+  "glossary-add-button"
+) as HTMLButtonElement;
+const glossarySearchInput = document.getElementById(
+  "glossary-search-input"
+) as HTMLInputElement;
+const glossaryCount = document.getElementById("glossary-count") as HTMLElement;
+const glossaryFeedback = document.getElementById("glossary-feedback") as HTMLElement;
+const glossaryEmpty = document.getElementById("glossary-empty") as HTMLElement;
+const glossaryList = document.getElementById("glossary-list") as HTMLElement;
 
-let activeProvider: ExtensionSettings["activeProvider"] = "google";
+let activeProvider: ExtensionSettings["activeProvider"] = "openai";
 let persistedSettings = mergeSettings({});
 let permissionCheckToken = 0;
 let isSubmitting = false;
+let glossaryTerms: GlossaryTerm[] = [];
 
 function normalizeComparableBaseUrl(value: string): string {
   try {
@@ -98,6 +123,150 @@ function setFeedback(message: string, tone: "default" | "success" | "error" = "d
   feedback.dataset.tone = tone;
 }
 
+function setGlossaryFeedback(
+  message: string,
+  tone: "default" | "success" | "error" = "default"
+): void {
+  glossaryFeedback.textContent = message;
+
+  if (tone === "default" || !message) {
+    glossaryFeedback.removeAttribute("data-tone");
+    return;
+  }
+
+  glossaryFeedback.dataset.tone = tone;
+}
+
+function matchesGlossarySearch(term: GlossaryTerm, query: string): boolean {
+  if (!query) {
+    return true;
+  }
+
+  const normalizedQuery = query.toLocaleLowerCase();
+  return (
+    term.sourceText.toLocaleLowerCase().includes(normalizedQuery) ||
+    term.targetText.toLocaleLowerCase().includes(normalizedQuery)
+  );
+}
+
+function renderGlossaryTerms(): void {
+  const query = glossarySearchInput.value.trim();
+  const visibleTerms = glossaryTerms.filter((term) =>
+    matchesGlossarySearch(term, query)
+  );
+
+  glossaryCount.textContent = `${glossaryTerms.length} 条`;
+  glossaryEmpty.hidden = glossaryTerms.length > 0;
+  glossaryList.innerHTML = "";
+
+  for (const term of visibleTerms) {
+    const row = document.createElement("div");
+    row.className = "glossary-term-row";
+    row.dataset.termId = term.id;
+
+    const enabledInput = document.createElement("input");
+    enabledInput.type = "checkbox";
+    enabledInput.checked = term.enabled;
+    enabledInput.setAttribute("aria-label", `启用 ${term.sourceText}`);
+
+    const sourceInput = document.createElement("input");
+    sourceInput.type = "text";
+    sourceInput.value = term.sourceText;
+    sourceInput.setAttribute("aria-label", "英文术语");
+
+    const targetInput = document.createElement("input");
+    targetInput.type = "text";
+    targetInput.value = term.targetText;
+    targetInput.setAttribute("aria-label", "中文译法");
+
+    const saveTermButton = document.createElement("button");
+    saveTermButton.type = "button";
+    saveTermButton.dataset.action = "save";
+    saveTermButton.textContent = "保存";
+
+    const deleteTermButton = document.createElement("button");
+    deleteTermButton.type = "button";
+    deleteTermButton.dataset.action = "delete";
+    deleteTermButton.textContent = "删除";
+
+    enabledInput.addEventListener("change", async () => {
+      await toggleGlossaryTerm(term.id, enabledInput.checked);
+      setGlossaryFeedback(enabledInput.checked ? "已启用术语。" : "已停用术语。", "success");
+      await refreshGlossaryTerms();
+    });
+
+    saveTermButton.addEventListener("click", async () => {
+      try {
+        const updatedTerm = await updateGlossaryTerm(term.id, {
+          sourceText: sourceInput.value,
+          targetText: targetInput.value
+        });
+
+        if (!updatedTerm) {
+          throw new Error("该术语已不存在，请刷新后重试。");
+        }
+
+        setGlossaryFeedback("术语已保存。", "success");
+        await refreshGlossaryTerms();
+      } catch (error) {
+        setGlossaryFeedback(
+          error instanceof Error ? error.message : "术语保存失败，请稍后重试。",
+          "error"
+        );
+      }
+    });
+
+    [sourceInput, targetInput].forEach((input) => {
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+
+        event.preventDefault();
+        saveTermButton.click();
+      });
+    });
+
+    deleteTermButton.addEventListener("click", async () => {
+      await deleteGlossaryTerm(term.id);
+      setGlossaryFeedback("术语已删除。", "success");
+      await refreshGlossaryTerms();
+    });
+
+    row.append(
+      enabledInput,
+      sourceInput,
+      targetInput,
+      saveTermButton,
+      deleteTermButton
+    );
+    glossaryList.append(row);
+  }
+}
+
+async function refreshGlossaryTerms(): Promise<void> {
+  glossaryTerms = await getGlossaryTerms();
+  renderGlossaryTerms();
+}
+
+async function addGlossaryTermFromInputs(): Promise<void> {
+  try {
+    await upsertGlossaryTerm({
+      sourceText: glossarySourceInput.value,
+      targetText: glossaryTargetInput.value
+    });
+    glossarySourceInput.value = "";
+    glossaryTargetInput.value = "";
+    setGlossaryFeedback("术语已添加。", "success");
+    await refreshGlossaryTerms();
+  } catch (error) {
+    setGlossaryFeedback(
+      error instanceof Error ? error.message : "术语添加失败，请稍后重试。",
+      "error"
+    );
+  }
+}
+
 function setStatusBadge(
   element: HTMLElement,
   message: string,
@@ -115,7 +284,7 @@ function setButtonsDisabled(disabled: boolean): void {
 function setSuccessPanel(
   visible: boolean,
   title = "已经可以开始浅译了",
-  description = "回到网页后，点击图标即可开始。"
+  description = "回到网页后，点击右侧浅译按钮即可开始双语阅读。"
 ): void {
   successPanel.hidden = !visible;
   successTitle.textContent = title;
@@ -302,13 +471,13 @@ async function persistSettings(verifyBeforeSave: boolean): Promise<void> {
 
     if (verifyBeforeSave) {
       setFeedback(
-        "验证通过。现在可以开始浅译了。",
+        "验证通过。现在可以用自己的接口开始浅译了。",
         "success"
       );
       setSuccessPanel(
         true,
         "已经可以开始浅译了",
-        "回到网页后，点击图标即可开始。"
+        "回到网页后，点击右侧浅译按钮即可开始双语阅读。"
       );
     } else {
       if (settings.preferences.hasCompletedSetup) {
@@ -316,7 +485,7 @@ async function persistSettings(verifyBeforeSave: boolean): Promise<void> {
         setSuccessPanel(
           true,
           "已保存，可以继续浅译",
-          "回到网页后，点击图标即可开始。"
+          "回到网页后，点击右侧浅译按钮即可开始双语阅读。"
         );
       } else {
         setFeedback("已保存，建议再验证一次。", "success");
@@ -380,9 +549,29 @@ openAIBaseUrlInput.addEventListener("blur", () => {
   void syncStepState();
 });
 
+glossarySearchInput.addEventListener("input", () => {
+  renderGlossaryTerms();
+});
+
+glossaryAddButton.addEventListener("click", () => {
+  void addGlossaryTermFromInputs();
+});
+
+[glossarySourceInput, glossaryTargetInput].forEach((input) => {
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    void addGlossaryTermFromInputs();
+  });
+});
+
 void getSettings().then(async (settings) => {
   persistedSettings = settings;
   fillForm(settings);
   setFeedback("");
+  await refreshGlossaryTerms();
   await syncStepState();
 });

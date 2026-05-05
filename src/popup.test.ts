@@ -9,6 +9,7 @@ function buildStatus(overrides?: Partial<ExtensionStatus>): ExtensionStatus {
     hasCompletedSetup: true,
     activeTabSupported: true,
     activeTabImmersiveActive: false,
+    activeTabImmersiveLoading: false,
     ...overrides
   };
 }
@@ -46,6 +47,8 @@ describe("popup runtime", () => {
   });
 
   afterEach(() => {
+    window.dispatchEvent(new Event("pagehide"));
+    vi.useRealTimers();
     document.body.innerHTML = "";
     vi.unstubAllGlobals();
   });
@@ -106,6 +109,75 @@ describe("popup runtime", () => {
     await vi.waitFor(() => {
       expect(primaryButton.disabled).toBe(true);
       expect(document.getElementById("popup-feedback")?.textContent).toBe("已关闭。");
+    });
+  });
+
+  it("shows the stop action while immersive generation is loading", async () => {
+    sendMessageMock.mockResolvedValue(
+      buildStatus({
+        activeTabImmersiveLoading: true,
+        activeTabImmersiveProgress: {
+          totalCount: 8,
+          completedCount: 2,
+          insertedCount: 2,
+          cacheHits: 1
+        }
+      })
+    );
+
+    await import("./popup");
+
+    await vi.waitFor(() => {
+      expect(document.getElementById("status-chip")?.textContent).toBe(
+        "正在生成双语对照"
+      );
+      expect(document.getElementById("popup-description")?.textContent).toBe(
+        "已完成 2/8 个段落，已插入 2 段中文对照。"
+      );
+      expect(document.getElementById("primary-button")?.textContent).toBe(
+        "停止生成"
+      );
+    });
+  });
+
+  it("refreshes loading status until immersive generation finishes", async () => {
+    vi.useFakeTimers();
+    sendMessageMock
+      .mockResolvedValueOnce(
+        buildStatus({
+          activeTabImmersiveLoading: true,
+          activeTabImmersiveProgress: {
+            totalCount: 38,
+            completedCount: 0,
+            insertedCount: 0,
+            cacheHits: 0
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        buildStatus({
+          activeTabImmersiveActive: true,
+          activeTabImmersiveLoading: false
+        })
+      );
+
+    await import("./popup");
+
+    await vi.waitFor(() => {
+      expect(document.getElementById("popup-description")?.textContent).toBe(
+        "已完成 0/38 个段落，已插入 0 段中文对照。"
+      );
+    });
+
+    await vi.advanceTimersByTimeAsync(800);
+
+    await vi.waitFor(() => {
+      expect(document.getElementById("status-chip")?.textContent).toBe(
+        "当前页已开启双语对照"
+      );
+      expect(document.getElementById("primary-button")?.textContent).toBe(
+        "关闭双语对照"
+      );
     });
   });
 });

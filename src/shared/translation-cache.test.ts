@@ -98,6 +98,62 @@ describe("translation cache", () => {
     expect(differentModelKey).not.toBe(firstKey);
   });
 
+  it("separates openai cache keys by matched glossary fingerprint", async () => {
+    const baseKey = await buildTranslationCacheKey(settings, "The API is stable.");
+    const glossaryKey = await buildTranslationCacheKey(settings, "The API is stable.", [
+      {
+        id: "api",
+        sourceText: "API",
+        targetText: "接口",
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1
+      }
+    ]);
+    const updatedGlossaryKey = await buildTranslationCacheKey(
+      settings,
+      "The API is stable.",
+      [
+        {
+          id: "api",
+          sourceText: "API",
+          targetText: "应用程序接口",
+          enabled: true,
+          createdAt: 1,
+          updatedAt: 2
+        }
+      ]
+    );
+    const googleKey = await buildTranslationCacheKey(
+      mergeSettings({
+        activeProvider: "google",
+        google: { apiKey: "google-key" }
+      }),
+      "The API is stable.",
+      [
+        {
+          id: "api",
+          sourceText: "API",
+          targetText: "接口",
+          enabled: true,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ]
+    );
+    const googleKeyWithoutGlossary = await buildTranslationCacheKey(
+      mergeSettings({
+        activeProvider: "google",
+        google: { apiKey: "google-key" }
+      }),
+      "The API is stable."
+    );
+
+    expect(glossaryKey).not.toBe(baseKey);
+    expect(updatedGlossaryKey).not.toBe(glossaryKey);
+    expect(googleKey).toBe(googleKeyWithoutGlossary);
+  });
+
   it("stores cached translations and creates the cache index", async () => {
     const now = 1_000_000;
 

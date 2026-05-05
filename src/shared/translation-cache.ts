@@ -1,6 +1,7 @@
 import { normalizeOpenAIBaseUrl } from "./settings";
 import { normalizeTranslationText } from "./translation-runtime";
-import type { ExtensionSettings } from "./types";
+import { createGlossaryFingerprint } from "./glossary";
+import type { ExtensionSettings, GlossaryTerm } from "./types";
 
 export const TRANSLATION_CACHE_PREFIX = "litetrace.cache.entry.";
 export const TRANSLATION_CACHE_INDEX_KEY = "litetrace.cache.index";
@@ -150,7 +151,8 @@ async function rebuildTranslationCacheIndex(
 
 function createIdentityString(
   settings: ExtensionSettings,
-  text: string
+  text: string,
+  glossaryTerms: GlossaryTerm[] = []
 ): string {
   return [
     settings.activeProvider,
@@ -159,6 +161,9 @@ function createIdentityString(
       : normalizeOpenAIBaseUrl(settings.openai.baseUrl),
     settings.activeProvider === "google" ? "" : settings.openai.model.trim(),
     settings.preferences.targetLang,
+    settings.activeProvider === "openai"
+      ? createGlossaryFingerprint(text, glossaryTerms)
+      : "",
     normalizeTranslationText(text)
   ].join("\u241F");
 }
@@ -174,16 +179,18 @@ async function sha256Hex(input: string): Promise<string> {
 
 export async function buildTranslationCacheKey(
   settings: ExtensionSettings,
-  text: string
+  text: string,
+  glossaryTerms: GlossaryTerm[] = []
 ): Promise<string> {
-  const hash = await sha256Hex(createIdentityString(settings, text));
+  const hash = await sha256Hex(createIdentityString(settings, text, glossaryTerms));
   return `${TRANSLATION_CACHE_PREFIX}${hash}`;
 }
 
 export async function getCachedTranslations(
   settings: ExtensionSettings,
   texts: string[],
-  now = Date.now()
+  now = Date.now(),
+  glossaryTerms: GlossaryTerm[] = []
 ): Promise<CachedTranslationsResult> {
   if (texts.length === 0) {
     return {
@@ -193,7 +200,7 @@ export async function getCachedTranslations(
   }
 
   const keys = await Promise.all(
-    texts.map((text) => buildTranslationCacheKey(settings, text))
+    texts.map((text) => buildTranslationCacheKey(settings, text, glossaryTerms))
   );
   const stored = await chrome.storage.local.get([
     TRANSLATION_CACHE_INDEX_KEY,
@@ -295,14 +302,17 @@ export async function getCachedTranslations(
 export async function setCachedTranslations(
   settings: ExtensionSettings,
   entries: Array<{ text: string; translation: string }>,
-  now = Date.now()
+  now = Date.now(),
+  glossaryTerms: GlossaryTerm[] = []
 ): Promise<void> {
   if (entries.length === 0) {
     return;
   }
 
   const keys = await Promise.all(
-    entries.map((entry) => buildTranslationCacheKey(settings, entry.text))
+    entries.map((entry) =>
+      buildTranslationCacheKey(settings, entry.text, glossaryTerms)
+    )
   );
   const existingIndex = await readTranslationCacheIndex();
   const nextIndex = existingIndex ? cloneCacheIndex(existingIndex) : createEmptyCacheIndex();

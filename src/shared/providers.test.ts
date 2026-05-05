@@ -7,10 +7,12 @@ import {
   translateTextsDetailed
 } from "./providers";
 import { mergeSettings } from "./settings";
+import { GLOSSARY_STORAGE_KEY } from "./glossary";
 import {
   buildTranslationCacheKey,
   TRANSLATION_CACHE_TTL_MS
 } from "./translation-cache";
+import type { GlossaryTerm } from "./types";
 
 const googleSettings = mergeSettings({
   activeProvider: "google",
@@ -87,7 +89,22 @@ describe("provider helpers", () => {
   });
 
   it("builds openai-compatible requests", () => {
-    const request = createOpenAIRequest(["Hello"], openAISettings, "selection");
+    const request = createOpenAIRequest(
+      ["The API stays stable."],
+      openAISettings,
+      "selection",
+      "rich",
+      [
+        {
+          id: "api",
+          sourceText: "API",
+          targetText: "接口",
+          enabled: true,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ]
+    );
     const requestBody = JSON.parse(request.init.body as string) as {
       messages: Array<{ role: string; content: string }>;
     };
@@ -96,6 +113,7 @@ describe("provider helpers", () => {
     const userPayload = JSON.parse(userMessage?.content ?? "{}") as {
       scene?: string;
       style?: string;
+      glossary?: Array<{ source: string; target: string }>;
       output?: { preserveOrder?: boolean };
     };
 
@@ -105,7 +123,36 @@ describe("provider helpers", () => {
     expect(systemMessage?.content).toContain("selection-based lookup");
     expect(userPayload.scene).toBe("selection");
     expect(userPayload.style).toContain("适合划词即看");
+    expect(userPayload.glossary).toEqual([{ source: "API", target: "接口" }]);
     expect(userPayload.output?.preserveOrder).toBe(true);
+  });
+
+  it("does not include unmatched openai glossary terms", () => {
+    const request = createOpenAIRequest(
+      ["No matching term here."],
+      openAISettings,
+      "selection",
+      "rich",
+      [
+        {
+          id: "api",
+          sourceText: "API",
+          targetText: "接口",
+          enabled: true,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ]
+    );
+    const requestBody = JSON.parse(request.init.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userMessage = requestBody.messages.find((message) => message.role === "user");
+    const userPayload = JSON.parse(userMessage?.content ?? "{}") as {
+      glossary?: unknown[];
+    };
+
+    expect(userPayload.glossary).toEqual([]);
   });
 
   it("builds a paragraph-oriented prompt for immersive reading", () => {
@@ -450,6 +497,81 @@ describe("provider helpers", () => {
     expect(storageStore[storedWorldKey]).toMatchObject({
       translation: "世界"
     });
+  });
+
+  it("stores cache entries with only the glossary sent in the openai request", async () => {
+    const apiTerm: GlossaryTerm = {
+      id: "api",
+      sourceText: "API",
+      targetText: "接口",
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const longTerms: GlossaryTerm[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `long-${index}`,
+      sourceText: `VeryLongTechnicalTerm${index.toString().padStart(2, "0")}`,
+      targetText: `长术语${index}`,
+      enabled: true,
+      createdAt: 2 + index,
+      updatedAt: 2 + index
+    }));
+    const longText = longTerms
+      .map((term) => term.sourceText)
+      .join(" is documented with ");
+    const apiText = "The API stays stable across releases.";
+    storageStore[GLOSSARY_STORAGE_KEY] = {
+      version: 1,
+      terms: [apiTerm, ...longTerms]
+    };
+    const openAIResponse = {
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [
+          {
+            message: {
+              content: '{"translations":["长术语译文","API 旧译文"]}'
+            }
+          }
+        ]
+      })
+    } as unknown as Response;
+    const openAIFetcher = vi.fn().mockResolvedValue(openAIResponse);
+
+    await expect(
+      translateTextsDetailed([longText, apiText], openAISettings, openAIFetcher)
+    ).resolves.toEqual({
+      translations: ["长术语译文", "API 旧译文"],
+      meta: {
+        cacheHits: 0,
+        requestedCount: 2,
+        networkCount: 2
+      }
+    });
+
+    const requestBody = JSON.parse(
+      openAIFetcher.mock.calls[0][1]?.body as string
+    ) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userMessage = requestBody.messages.find((message) => message.role === "user");
+    const userPayload = JSON.parse(userMessage?.content ?? "{}") as {
+      glossary: Array<{ source: string; target: string }>;
+    };
+    const apiKeyWithoutSentGlossary = await buildTranslationCacheKey(
+      openAISettings,
+      apiText
+    );
+    const apiKeyWithApiGlossary = await buildTranslationCacheKey(openAISettings, apiText, [
+      apiTerm
+    ]);
+
+    expect(userPayload.glossary).toHaveLength(50);
+    expect(userPayload.glossary.some((term) => term.source === "API")).toBe(false);
+    expect(storageStore[apiKeyWithoutSentGlossary]).toMatchObject({
+      translation: "API 旧译文"
+    });
+    expect(storageStore[apiKeyWithApiGlossary]).toBeUndefined();
   });
 
   it("ignores expired cache entries and refetches fresh translations", async () => {

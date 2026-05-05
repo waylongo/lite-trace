@@ -1,6 +1,6 @@
 import type { ExtensionStatus } from "./shared/types";
 
-export type PopupMode = "unconfigured" | "ready" | "active";
+export type PopupMode = "unconfigured" | "ready" | "loading" | "active";
 
 export interface PopupViewModel {
   mode: PopupMode;
@@ -17,13 +17,34 @@ export function derivePopupViewModel(status: ExtensionStatus): PopupViewModel {
   if (!status.configured) {
     return {
       mode: "unconfigured",
-      title: "先完成接口配置",
-      description: "配置好后，点击图标就能开启双语阅读。",
+      title: "先接入你的大模型 API",
+      description: "配置 OpenAI Compatible 后，术语库会帮助技术概念保持译法一致。",
       providerLine: "当前状态：未配置",
-      hint: "需要使用你自己的翻译接口。",
+      hint: "Google Translate 也可作为备选。",
       primaryLabel: "去完成配置",
       secondaryLabel: undefined,
       disablePrimary: false
+    };
+  }
+
+  if (status.activeTabImmersiveLoading) {
+    const progress = status.activeTabImmersiveProgress;
+    const progressLine = progress?.totalCount
+      ? `已完成 ${progress.completedCount}/${progress.totalCount} 个段落，已插入 ${progress.insertedCount} 段中文对照。`
+      : "正在扫描当前页面正文。";
+    const cacheHint = progress?.cacheHits
+      ? `已复用 ${progress.cacheHits} 段已有译文。`
+      : "首批译文完成后会先插入页面。";
+
+    return {
+      mode: "loading",
+      title: "正在生成双语对照",
+      description: progressLine,
+      providerLine: `当前接口：${status.providerLabel}`,
+      hint: cacheHint,
+      primaryLabel: "停止生成",
+      secondaryLabel: "打开设置",
+      disablePrimary: !status.activeTabSupported
     };
   }
 
@@ -42,9 +63,9 @@ export function derivePopupViewModel(status: ExtensionStatus): PopupViewModel {
 
   return {
     mode: "ready",
-    title: "可以开始沉浸阅读",
+    title: "可以开始技术双语阅读",
     description: status.hasCompletedSetup
-      ? "当前配置已可用。"
+      ? "当前配置已可用，术语库会在命中时参与 LLM 翻译。"
       : "配置已保存，建议先验证一次。",
     providerLine: `当前接口：${status.providerLabel}`,
     hint: status.activeTabSupported

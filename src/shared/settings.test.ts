@@ -6,6 +6,16 @@ import {
 } from "./settings";
 
 describe("settings helpers", () => {
+  it("defaults new settings to OpenAI while preserving existing provider choices", () => {
+    expect(mergeSettings({}).activeProvider).toBe("openai");
+    expect(
+      mergeSettings({
+        activeProvider: "google",
+        google: { apiKey: "key" }
+      }).activeProvider
+    ).toBe("google");
+  });
+
   it("normalizes openai base urls", () => {
     expect(normalizeOpenAIBaseUrl("https://api.openai.com/v1/")).toBe(
       "https://api.openai.com/v1"

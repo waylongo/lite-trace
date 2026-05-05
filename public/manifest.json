@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "浅译 LiteTrace",
-  "description": "沉浸式双语对照翻译与划词 AI 翻译。",
-  "version": "1.0.0",
+  "description": "接入自己的大模型 API，用本地术语记忆保持技术概念译法一致。",
+  "version": "1.2.0",
   "icons": {
     "16": "icons/litetrace-16.png",
     "32": "icons/litetrace-32.png",

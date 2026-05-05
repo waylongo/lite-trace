@@ -37,7 +37,9 @@ export function sanitizeSettings(rawValue: unknown): ExtensionSettings {
   }
 
   const activeProvider =
-    rawValue.activeProvider === "openai" ? "openai" : "google";
+    rawValue.activeProvider === "google" || rawValue.activeProvider === "openai"
+      ? rawValue.activeProvider
+      : DEFAULT_SETTINGS.activeProvider;
 
   const googleSource = isObject(rawValue.google) ? rawValue.google : {};
   const openaiSource = isObject(rawValue.openai) ? rawValue.openai : {};

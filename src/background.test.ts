@@ -9,6 +9,7 @@ const {
   saveSettingsMock,
   translateTextsDetailedMock,
   triggerActiveTabImmersiveMock,
+  triggerTabGlossaryTermEditorMock,
   triggerTabSelectionTranslationMock
 } = vi.hoisted(() => ({
   getExtensionStatusMock: vi.fn(),
@@ -16,12 +17,14 @@ const {
   saveSettingsMock: vi.fn(),
   translateTextsDetailedMock: vi.fn(),
   triggerActiveTabImmersiveMock: vi.fn(),
+  triggerTabGlossaryTermEditorMock: vi.fn(),
   triggerTabSelectionTranslationMock: vi.fn()
 }));
 
 vi.mock("./background-runtime", () => ({
   getExtensionStatus: getExtensionStatusMock,
   triggerActiveTabImmersive: triggerActiveTabImmersiveMock,
+  triggerTabGlossaryTermEditor: triggerTabGlossaryTermEditorMock,
   triggerTabSelectionTranslation: triggerTabSelectionTranslationMock
 }));
 
@@ -91,8 +94,10 @@ describe("background message handlers", () => {
     saveSettingsMock.mockReset();
     getExtensionStatusMock.mockReset();
     triggerActiveTabImmersiveMock.mockReset();
+    triggerTabGlossaryTermEditorMock.mockReset();
     triggerTabSelectionTranslationMock.mockReset();
     triggerActiveTabImmersiveMock.mockResolvedValue({ ok: true });
+    triggerTabGlossaryTermEditorMock.mockResolvedValue({ ok: true });
     triggerTabSelectionTranslationMock.mockResolvedValue({ ok: true });
 
     vi.stubGlobal("chrome", {
@@ -342,18 +347,18 @@ describe("background message handlers", () => {
       contexts: ["action"]
     });
     expect(chrome.contextMenus.create).toHaveBeenCalledWith({
-      id: "litetrace-translate-selection",
-      title: "翻译所选内容",
+      id: "litetrace-add-glossary-term",
+      title: "加入浅译术语",
       contexts: ["selection"]
     });
   });
 
-  it("routes the selection context menu to the content script helper", async () => {
+  it("routes the selection context menu to the glossary editor helper", async () => {
     await loadBackgroundModule();
 
     onContextMenuClickedListener?.(
       {
-        menuItemId: "litetrace-translate-selection",
+        menuItemId: "litetrace-add-glossary-term",
         selectionText: "Hello world"
       } as chrome.contextMenus.OnClickData,
       {
@@ -363,7 +368,7 @@ describe("background message handlers", () => {
     );
 
     await vi.waitFor(() => {
-      expect(triggerTabSelectionTranslationMock).toHaveBeenCalledWith(88, "Hello world");
+      expect(triggerTabGlossaryTermEditorMock).toHaveBeenCalledWith(88, "Hello world");
     });
   });
 });

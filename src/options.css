@@ -263,6 +263,101 @@ button {
   gap: 14px;
 }
 
+.glossary-section input {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  color: var(--ink);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.glossary-section input:focus {
+  outline: none;
+  border-color: rgba(21, 102, 78, 0.58);
+  box-shadow: 0 0 0 4px rgba(21, 102, 78, 0.11);
+}
+
+.glossary-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.glossary-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.glossary-count,
+.glossary-feedback,
+.glossary-empty {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.glossary-count {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.glossary-feedback,
+.glossary-empty {
+  margin: 10px 0 0;
+}
+
+.glossary-feedback[data-tone="error"] {
+  color: #a3422f;
+}
+
+.glossary-feedback[data-tone="success"] {
+  color: var(--primary);
+}
+
+.glossary-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.glossary-term-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel-muted);
+}
+
+.glossary-term-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  accent-color: var(--primary);
+}
+
+.glossary-term-row button {
+  min-height: 38px;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: #eef1ee;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.glossary-term-row button[data-action="delete"] {
+  background: var(--error-soft);
+  color: #8d3a2a;
+}
+
 .button-row {
   display: flex;
   gap: 12px;
@@ -340,6 +435,15 @@ button {
 
   .provider-picker {
     grid-template-columns: 1fr;
+  }
+
+  .glossary-add-row,
+  .glossary-term-row {
+    grid-template-columns: 1fr;
+  }
+
+  .glossary-tools {
+    display: grid;
   }
 
 }

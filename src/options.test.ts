@@ -25,6 +25,14 @@ function renderOptionsFixture(): void {
           <input id="openai-base-url" />
           <input id="openai-model" />
           <input id="openai-api-key" />
+          <input id="glossary-source-input" />
+          <input id="glossary-target-input" />
+          <button id="glossary-add-button" type="button">添加</button>
+          <input id="glossary-search-input" />
+          <span id="glossary-count"></span>
+          <p id="glossary-feedback"></p>
+          <p id="glossary-empty"></p>
+          <div id="glossary-list"></div>
           <button id="save-button" type="submit">保存</button>
           <button id="verify-button" type="button">保存并验证</button>
         </form>
@@ -117,5 +125,142 @@ describe("options runtime", () => {
       "pageScope",
       "targetLang"
     ]);
+  });
+
+  it("selects OpenAI by default for new users while keeping Google switchable", async () => {
+    storageStore = {};
+
+    await import("./options");
+
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector<HTMLButtonElement>("[data-provider-tab='openai']")
+          ?.classList.contains("is-active")
+      ).toBe(true);
+      expect(
+        document.querySelector<HTMLElement>("[data-provider-pane='openai']")
+          ?.classList.contains("is-active")
+      ).toBe(true);
+      expect(document.getElementById("active-provider-label")?.textContent).toBe(
+        "OpenAI 兼容接口"
+      );
+    });
+
+    document
+      .querySelector<HTMLButtonElement>("[data-provider-tab='google']")
+      ?.click();
+
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector<HTMLButtonElement>("[data-provider-tab='google']")
+          ?.classList.contains("is-active")
+      ).toBe(true);
+      expect(
+        document.querySelector<HTMLElement>("[data-provider-pane='google']")
+          ?.classList.contains("is-active")
+      ).toBe(true);
+      expect(document.getElementById("active-provider-label")?.textContent).toBe(
+        "Google Translate API"
+      );
+    });
+  });
+
+  it("manages glossary terms in settings without changing provider settings", async () => {
+    await import("./options");
+
+    await vi.waitFor(() => {
+      expect(document.getElementById("glossary-empty")?.hidden).toBe(false);
+    });
+
+    (document.getElementById("glossary-source-input") as HTMLInputElement).value =
+      "React Server Components";
+    (document.getElementById("glossary-target-input") as HTMLInputElement).value =
+      "React 服务器组件";
+    (document.getElementById("glossary-add-button") as HTMLButtonElement).click();
+
+    await vi.waitFor(() => {
+      expect(document.getElementById("glossary-count")?.textContent).toBe("1 条");
+      expect(document.getElementById("glossary-empty")?.hidden).toBe(true);
+      expect(document.querySelectorAll(".glossary-term-row")).toHaveLength(1);
+    });
+
+    expect(storageStore["litetrace.glossary.terms"]).toMatchObject({
+      version: 1,
+      terms: [
+        {
+          sourceText: "React Server Components",
+          targetText: "React 服务器组件",
+          enabled: true
+        }
+      ]
+    });
+
+    const targetInput = document.querySelectorAll<HTMLInputElement>(
+      ".glossary-term-row input"
+    )[2];
+    targetInput.value = "RSC";
+    document
+      .querySelector<HTMLButtonElement>(".glossary-term-row button[data-action='save']")
+      ?.click();
+
+    await vi.waitFor(() => {
+      expect(
+        (storageStore["litetrace.glossary.terms"] as { terms: Array<{ targetText: string }> })
+          .terms[0].targetText
+      ).toBe("RSC");
+    });
+
+    const enabledInput = document.querySelector<HTMLInputElement>(
+      ".glossary-term-row input[type='checkbox']"
+    );
+    enabledInput?.click();
+
+    await vi.waitFor(() => {
+      expect(
+        (storageStore["litetrace.glossary.terms"] as { terms: Array<{ enabled: boolean }> })
+          .terms[0].enabled
+      ).toBe(false);
+    });
+
+    const sourceInput = document.querySelectorAll<HTMLInputElement>(
+      ".glossary-term-row input"
+    )[1];
+    const renamedTargetInput = document.querySelectorAll<HTMLInputElement>(
+      ".glossary-term-row input"
+    )[2];
+    sourceInput.value = "React Compiler";
+    renamedTargetInput.value = "React 编译器";
+    document
+      .querySelector<HTMLButtonElement>(".glossary-term-row button[data-action='save']")
+      ?.click();
+
+    await vi.waitFor(() => {
+      const terms = (
+        storageStore["litetrace.glossary.terms"] as {
+          terms: Array<{
+            sourceText: string;
+            targetText: string;
+            enabled: boolean;
+          }>;
+        }
+      ).terms;
+
+      expect(terms).toHaveLength(1);
+      expect(terms[0]).toMatchObject({
+        sourceText: "React Compiler",
+        targetText: "React 编译器",
+        enabled: false
+      });
+    });
+
+    document
+      .querySelector<HTMLButtonElement>(".glossary-term-row button[data-action='delete']")
+      ?.click();
+
+    await vi.waitFor(() => {
+      expect(
+        (storageStore["litetrace.glossary.terms"] as { terms: unknown[] }).terms
+      ).toHaveLength(0);
+    });
   });
 });

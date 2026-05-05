@@ -44,6 +44,22 @@ export interface TranslationMeta {
 
 export type TranslationScene = "selection" | "page";
 
+export interface ImmersiveProgress {
+  totalCount: number;
+  completedCount: number;
+  insertedCount: number;
+  cacheHits: number;
+}
+
+export interface GlossaryTerm {
+  id: string;
+  sourceText: string;
+  targetText: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface TranslationSuccess {
   ok: true;
   translations: string[];
@@ -70,6 +86,8 @@ export interface ExtensionStatus {
   hasCompletedSetup: boolean;
   activeTabSupported: boolean;
   activeTabImmersiveActive: boolean;
+  activeTabImmersiveLoading: boolean;
+  activeTabImmersiveProgress?: ImmersiveProgress;
 }
 
 export interface ReadingCoachmarkStatus {
@@ -83,6 +101,7 @@ export type RuntimeMessage =
   | { type: "TRANSLATE_PAGE_BLOCKS"; payload: TranslationRequestPayload }
   | { type: "TRANSLATE_SELECTION"; payload: TranslationRequestPayload }
   | { type: "TRIGGER_SELECTION_TRANSLATION"; payload?: { text?: string } }
+  | { type: "OPEN_GLOSSARY_TERM_EDITOR"; payload?: { text?: string } }
   | {
       type: "CANCEL_IMMERSIVE_TRANSLATION";
       payload: { immersiveJobId: number };
@@ -104,7 +123,7 @@ export interface GroupedTranslatableBlocks {
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
-  activeProvider: "google",
+  activeProvider: "openai",
   google: {
     apiKey: ""
   },

@@ -1,11 +1,16 @@
 import { getPermissionOriginsForProvider, normalizeOpenAIBaseUrl } from "./settings";
 import {
+  getGlossaryTerms,
+  getMatchedGlossaryTerms
+} from "./glossary";
+import {
   getCachedTranslations,
   setCachedTranslations
 } from "./translation-cache";
 import { normalizeTranslationText } from "./translation-runtime";
 import type {
   ExtensionSettings,
+  GlossaryTerm,
   TranslationError,
   TranslationMeta,
   TranslationScene
@@ -190,6 +195,7 @@ function buildOpenAISystemPrompt(scene: TranslationScene): string {
       "Produce faithful, fluent, and idiomatic Simplified Chinese.",
       "For words, short phrases, titles, and UI text, prefer concise and natural Chinese phrasing instead of stiff literal translation.",
       "For sentences, preserve the original meaning, tone, names, brands, numbers, units, and technical terms.",
+      "When the user provides glossary entries, follow those English-to-Chinese terminology preferences exactly where they fit the source text.",
       "Do not add explanations, notes, examples, transliteration, or dictionary labels unless they already appear in the source text.",
       'Return only JSON in the exact shape {"translations":["..."]}.',
       "Keep the same item order and item count as the input.",
@@ -201,6 +207,7 @@ function buildOpenAISystemPrompt(scene: TranslationScene): string {
     "You are an expert English-to-Simplified-Chinese translation engine for immersive bilingual reading.",
     "Translate each passage into fluent, idiomatic Simplified Chinese that reads naturally for native Chinese readers.",
     "Preserve meaning, tone, structure, names, brands, numbers, units, and technical terminology.",
+    "When the user provides glossary entries, follow those English-to-Chinese terminology preferences exactly where they fit the source text.",
     "Prefer smooth Chinese sentence flow over rigid word-for-word mirroring, but do not add or omit meaning.",
     "Keep paragraph-level readability strong so the translation can sit directly under the original text for side-by-side reading.",
     'Return only JSON in the exact shape {"translations":["..."]}.',
@@ -213,18 +220,30 @@ export function createOpenAIRequest(
   texts: string[],
   settings: ExtensionSettings,
   scene: TranslationScene = "selection",
-  mode: "rich" | "compat-minimal" = "rich"
+  mode: "rich" | "compat-minimal" = "rich",
+  glossaryTerms: GlossaryTerm[] = []
 ) {
   const baseUrl = normalizeOpenAIBaseUrl(settings.openai.baseUrl);
+  const matchedGlossary = getMatchedGlossaryTerms(texts, glossaryTerms);
   const userContent =
     mode === "compat-minimal"
       ? [
           `targetLanguage: ${settings.preferences.targetLang}`,
           `scene: ${scene}`,
           `count: ${texts.length}`,
+          matchedGlossary.length > 0
+            ? [
+                "glossary:",
+                ...matchedGlossary.map(
+                  (term) => `- ${term.sourceText} => ${term.targetText}`
+                )
+              ].join("\n")
+            : "",
           "texts:",
           ...texts.map((text, index) => `[${index + 1}] ${text}`)
-        ].join("\n")
+        ]
+          .filter(Boolean)
+          .join("\n")
       : JSON.stringify({
           scene,
           targetLanguage: settings.preferences.targetLang,
@@ -233,6 +252,10 @@ export function createOpenAIRequest(
             scene === "selection"
               ? "适合划词即看，忠实原意、简洁自然、避免生硬直译"
               : "适合整段阅读，忠实原意、自然流畅、符合中文表达习惯",
+          glossary: matchedGlossary.map((term) => ({
+            source: term.sourceText,
+            target: term.targetText
+          })),
           output: {
             format: "json",
             schema: {
@@ -614,10 +637,17 @@ async function requestOpenAIMessageContent(
   settings: ExtensionSettings,
   scene: TranslationScene,
   fetcher: typeof fetch,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  glossaryTerms: GlossaryTerm[] = []
 ): Promise<string> {
   async function requestWithMode(mode: "rich" | "compat-minimal"): Promise<string> {
-    const request = createOpenAIRequest(texts, settings, scene, mode);
+    const request = createOpenAIRequest(
+      texts,
+      settings,
+      scene,
+      mode,
+      glossaryTerms
+    );
     const response = await fetchWithTransientRetry(
       request.url,
       request.init,
@@ -700,7 +730,8 @@ async function translateOpenAITexts(
   scene: TranslationScene,
   fetcher: typeof fetch,
   permissionsChecked = false,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  glossaryTerms: GlossaryTerm[] = []
 ): Promise<RemoteTranslationResult> {
   try {
     const content = await requestOpenAIMessageContent(
@@ -708,7 +739,8 @@ async function translateOpenAITexts(
       settings,
       scene,
       fetcher,
-      signal
+      signal,
+      glossaryTerms
     );
     return {
       translations: parseOpenAITranslations(content, texts.length),
@@ -782,7 +814,8 @@ async function requestRemoteTranslations(
   scene: TranslationScene,
   fetcher: typeof fetch,
   permissionsChecked: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  glossaryTerms: GlossaryTerm[] = []
 ): Promise<RemoteTranslationResult> {
   return settings.activeProvider === "google"
     ? await requestGoogleTranslations(texts, settings, fetcher, signal)
@@ -792,7 +825,8 @@ async function requestRemoteTranslations(
         scene,
         fetcher,
         permissionsChecked,
-        signal
+        signal,
+        glossaryTerms
       );
 }
 
@@ -802,7 +836,8 @@ async function requestRemoteTranslationsWithBatchFallback(
   scene: TranslationScene,
   fetcher: typeof fetch,
   permissionsChecked: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  glossaryTerms: GlossaryTerm[] = []
 ): Promise<RemoteTranslationResult> {
   try {
     return await requestRemoteTranslations(
@@ -811,7 +846,8 @@ async function requestRemoteTranslationsWithBatchFallback(
       scene,
       fetcher,
       permissionsChecked,
-      signal
+      signal,
+      glossaryTerms
     );
   } catch (error) {
     if (!shouldSplitBatchOnFailure(error, texts, scene)) {
@@ -828,7 +864,8 @@ async function requestRemoteTranslationsWithBatchFallback(
       scene,
       fetcher,
       permissionsChecked,
-      signal
+      signal,
+      glossaryTerms
     );
     const rightResult = await requestRemoteTranslationsWithBatchFallback(
       rightTexts,
@@ -836,7 +873,8 @@ async function requestRemoteTranslationsWithBatchFallback(
       scene,
       fetcher,
       permissionsChecked,
-      signal
+      signal,
+      glossaryTerms
     );
 
     return {
@@ -862,7 +900,18 @@ export async function translateTextsDetailed(
   }
 
   try {
-    const cachedResult = await getCachedTranslations(settings, texts);
+    const glossaryTerms =
+      settings.activeProvider === "openai" ? await getGlossaryTerms() : [];
+    const cacheLookupGlossaryTerms =
+      settings.activeProvider === "openai"
+        ? getMatchedGlossaryTerms(texts, glossaryTerms)
+        : [];
+    const cachedResult = await getCachedTranslations(
+      settings,
+      texts,
+      Date.now(),
+      cacheLookupGlossaryTerms
+    );
     const resolvedTranslations = [...cachedResult.translations];
     const missingGroups = groupMissingTexts(texts, resolvedTranslations);
 
@@ -878,13 +927,18 @@ export async function translateTextsDetailed(
     }
 
     const missingTexts = missingGroups.map((group) => group.text);
+    const remoteGlossaryTerms =
+      settings.activeProvider === "openai"
+        ? getMatchedGlossaryTerms(missingTexts, glossaryTerms)
+        : [];
     const remoteResult = await requestRemoteTranslationsWithBatchFallback(
       missingTexts,
       settings,
       scene,
       fetcher,
       true,
-      signal
+      signal,
+      remoteGlossaryTerms
     );
 
     missingGroups.forEach((group, index) => {
@@ -904,7 +958,9 @@ export async function translateTextsDetailed(
       missingGroups.map((group, index) => ({
         text: group.text,
         translation: remoteResult.translations[index]
-      }))
+      })),
+      Date.now(),
+      remoteGlossaryTerms
     );
 
     return {

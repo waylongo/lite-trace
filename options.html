@@ -20,9 +20,9 @@
           />
           <div class="page-copy">
             <p class="eyebrow">浅译 LiteTrace</p>
-            <h1>浅译一下，就顺着读了</h1>
+            <h1>用自己的大模型读英文技术内容</h1>
             <p class="page-description">
-              配好一个翻译接口，之后点一下图标，就能开始双语阅读。
+              接入你的 OpenAI Compatible / LLM API，并用本地术语库保持关键概念译法一致。
             </p>
           </div>
           <div class="meta-row" aria-label="当前状态">
@@ -41,27 +41,27 @@
           <section class="settings-section">
             <div class="section-head">
               <h2>选择引擎</h2>
-              <p>Google 更省事，OpenAI Compatible 更灵活。</p>
+              <p>默认推荐 OpenAI Compatible，用于发挥术语库效果；Google 可作为省事备选。</p>
             </div>
 
             <div class="provider-picker" aria-label="翻译引擎">
               <button
-                data-provider-tab="google"
+                data-provider-tab="openai"
                 class="provider-button is-active"
                 type="button"
                 aria-pressed="true"
               >
-                <span>Google Translate</span>
-                <small>只需填写 API Key</small>
+                <span>OpenAI Compatible</span>
+                <small>推荐用于大模型翻译和术语一致性</small>
               </button>
               <button
-                data-provider-tab="openai"
+                data-provider-tab="google"
                 class="provider-button"
                 type="button"
                 aria-pressed="false"
               >
-                <span>OpenAI Compatible</span>
-                <small>支持官方和兼容接口</small>
+                <span>Google Translate</span>
+                <small>只需填写 API Key</small>
               </button>
             </div>
           </section>
@@ -69,24 +69,10 @@
           <section class="settings-section">
             <div class="section-head">
               <h2>填写信息</h2>
-              <p>配置只保存在本地浏览器。</p>
+              <p>填写你自己的接口信息，配置只保存在本地浏览器。</p>
             </div>
 
-            <section class="provider-pane is-active" data-provider-pane="google">
-              <label class="field">
-                <span>Google Translate API Key</span>
-                <input
-                  id="google-api-key"
-                  name="google-api-key"
-                  type="password"
-                  placeholder="AIza..."
-                  autocomplete="off"
-                />
-                <small>用于整页双语阅读和划词翻译。</small>
-              </label>
-            </section>
-
-            <section class="provider-pane" data-provider-pane="openai">
+            <section class="provider-pane is-active" data-provider-pane="openai">
               <label class="field">
                 <span>Base URL</span>
                 <input
@@ -123,6 +109,63 @@
                 <small>只保存在本地。</small>
               </label>
             </section>
+
+            <section class="provider-pane" data-provider-pane="google">
+              <label class="field">
+                <span>Google Translate API Key</span>
+                <input
+                  id="google-api-key"
+                  name="google-api-key"
+                  type="password"
+                  placeholder="AIza..."
+                  autocomplete="off"
+                />
+                <small>用于整页双语阅读和划词翻译。</small>
+              </label>
+            </section>
+          </section>
+
+          <section class="settings-section glossary-section">
+            <div class="section-head">
+              <h2>术语库</h2>
+              <p>
+                术语保存在本地；只有命中当前文本时，才会随请求发送给 OpenAI Compatible / LLM 接口。Google Translate 不会强制套用术语。
+              </p>
+            </div>
+
+            <div class="glossary-add-row" aria-label="新增术语">
+              <input
+                id="glossary-source-input"
+                type="text"
+                placeholder="英文术语，例如 React Server Components"
+                autocomplete="off"
+              />
+              <input
+                id="glossary-target-input"
+                type="text"
+                placeholder="中文译法，例如 React 服务器组件"
+                autocomplete="off"
+              />
+              <button id="glossary-add-button" class="secondary-button" type="button">
+                添加
+              </button>
+            </div>
+
+            <div class="glossary-tools">
+              <input
+                id="glossary-search-input"
+                type="search"
+                placeholder="搜索术语"
+                autocomplete="off"
+              />
+              <span id="glossary-count" class="glossary-count">0 条</span>
+            </div>
+
+            <p id="glossary-feedback" class="glossary-feedback" aria-live="polite"></p>
+            <p id="glossary-empty" class="glossary-empty">
+              暂无术语。阅读网页时选中英文术语，右键选择“加入浅译术语”即可添加。
+            </p>
+            <div id="glossary-list" class="glossary-list" aria-label="术语列表"></div>
           </section>
 
           <section class="settings-section actions-section">
@@ -147,7 +190,7 @@
           <div>
             <h2 id="success-title">完成</h2>
             <p id="success-description">
-              返回网页后，点击图标即可开始。
+              返回网页后，点击右侧浅译按钮即可开始双语阅读。
             </p>
           </div>
           <button id="finish-button" class="primary-button" type="button">

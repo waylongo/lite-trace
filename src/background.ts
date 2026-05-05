@@ -11,7 +11,7 @@ import { getSettings, saveSettings } from "./shared/storage";
 import {
   getExtensionStatus,
   triggerActiveTabImmersive,
-  triggerTabSelectionTranslation
+  triggerTabGlossaryTermEditor
 } from "./background-runtime";
 import type {
   ExtensionSettings,
@@ -24,7 +24,7 @@ import type {
 } from "./shared/types";
 
 const ACTION_MENU_ID = "litetrace-open-options";
-const SELECTION_MENU_ID = "litetrace-translate-selection";
+const SELECTION_GLOSSARY_MENU_ID = "litetrace-add-glossary-term";
 const requestCache = new Map<
   string,
   Promise<{ translations: string[]; meta: TranslationMeta }>
@@ -269,8 +269,8 @@ chrome.runtime.onInstalled.addListener(() => {
       contexts: ["action"]
     });
     chrome.contextMenus.create({
-      id: SELECTION_MENU_ID,
-      title: "翻译所选内容",
+      id: SELECTION_GLOSSARY_MENU_ID,
+      title: "加入浅译术语",
       contexts: ["selection"]
     });
   });
@@ -282,8 +282,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     return;
   }
 
-  if (info.menuItemId === SELECTION_MENU_ID && typeof tab?.id === "number") {
-    void triggerTabSelectionTranslation(tab.id, info.selectionText).catch(() => {
+  if (info.menuItemId === SELECTION_GLOSSARY_MENU_ID && typeof tab?.id === "number") {
+    void triggerTabGlossaryTermEditor(tab.id, info.selectionText).catch(() => {
       // Ignore menu-trigger transport failures; the content script handles in-page feedback.
     });
   }

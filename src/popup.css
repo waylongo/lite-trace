@@ -91,6 +91,11 @@ button {
   color: #865515;
 }
 
+.popup-card[data-mode="loading"] .status-chip {
+  background: rgba(31, 95, 153, 0.12);
+  color: var(--primary-strong);
+}
+
 .popup-copy {
   display: grid;
   gap: 6px;

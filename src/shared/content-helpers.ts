@@ -137,6 +137,17 @@ function hasNestedTargetBlock(element: HTMLElement): boolean {
   return Boolean(element.querySelector(TARGET_TAG_SELECTOR));
 }
 
+function collectTargetCandidates(root: HTMLElement): HTMLElement[] {
+  const candidates: HTMLElement[] = [];
+
+  if (TARGET_TAGS.has(root.tagName)) {
+    candidates.push(root);
+  }
+
+  candidates.push(...Array.from(root.querySelectorAll<HTMLElement>(TARGET_TAG_SELECTOR)));
+  return candidates;
+}
+
 interface ScanRoot {
   element: HTMLElement;
   priority: number;
@@ -265,40 +276,85 @@ export function collectTranslatableBlocks(
   const blocks: TranslatableBlock[] = [];
 
   for (const scanRoot of scanRoots) {
-    const walker = scanRoot.element.ownerDocument.createTreeWalker(
-      scanRoot.element,
-      NodeFilter.SHOW_ELEMENT
-    );
-
-    let currentNode: Node | null = walker.currentNode;
-
-    while (currentNode) {
-      if (currentNode instanceof HTMLElement) {
-        const element = currentNode;
-
-        if (
-          TARGET_TAGS.has(element.tagName) &&
-          !seen.has(element) &&
-          !hasNestedTargetBlock(element) &&
-          !isClaimedByHigherPriorityRoot(element, scanRoot, scanRoots)
-        ) {
-          seen.add(element);
-
-          if (!isSkippableElement(element) && isVisibleElement(element)) {
-            const text = normalizeText(element.textContent ?? "");
-
-            if (text && isTranslatableBlockText(element, text)) {
-              blocks.push({ element, text });
-            }
-          }
-        }
+    for (const element of collectTargetCandidates(scanRoot.element)) {
+      if (
+        seen.has(element) ||
+        hasNestedTargetBlock(element) ||
+        isClaimedByHigherPriorityRoot(element, scanRoot, scanRoots)
+      ) {
+        continue;
       }
 
-      currentNode = walker.nextNode() ?? null;
+      seen.add(element);
+
+      if (!isSkippableElement(element) && isVisibleElement(element)) {
+        const text = normalizeText(element.textContent ?? "");
+
+        if (text && isTranslatableBlockText(element, text)) {
+          blocks.push({ element, text });
+        }
+      }
     }
   }
 
   return blocks;
+}
+
+function getViewportPriority(
+  block: TranslatableBlock,
+  viewportHeight: number
+): { bucket: number; distance: number } {
+  const rect = block.element.getBoundingClientRect();
+
+  if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.bottom === 0) {
+    return {
+      bucket: 0,
+      distance: 0
+    };
+  }
+
+  if (rect.bottom > 0 && rect.top < viewportHeight) {
+    return {
+      bucket: 0,
+      distance: Math.max(0, rect.top)
+    };
+  }
+
+  if (rect.top >= viewportHeight) {
+    return {
+      bucket: 1,
+      distance: rect.top - viewportHeight
+    };
+  }
+
+  return {
+    bucket: 2,
+    distance: Math.abs(rect.bottom)
+  };
+}
+
+export function prioritizeTranslatableBlocks(
+  blocks: TranslatableBlock[],
+  viewportHeight = window.innerHeight || document.documentElement.clientHeight || 1
+): TranslatableBlock[] {
+  return blocks
+    .map((block, index) => ({
+      block,
+      index,
+      priority: getViewportPriority(block, Math.max(1, viewportHeight))
+    }))
+    .sort((left, right) => {
+      if (left.priority.bucket !== right.priority.bucket) {
+        return left.priority.bucket - right.priority.bucket;
+      }
+
+      if (left.priority.distance !== right.priority.distance) {
+        return left.priority.distance - right.priority.distance;
+      }
+
+      return left.index - right.index;
+    })
+    .map((item) => item.block);
 }
 
 export function groupTranslatableBlocks(

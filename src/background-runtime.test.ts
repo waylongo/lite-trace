@@ -13,7 +13,17 @@ describe("background runtime helpers", () => {
       }
 
       if (message.type === "GET_PAGE_IMMERSIVE_STATE") {
-        return { ok: true, immersiveActive: true };
+        return {
+          ok: true,
+          immersiveActive: true,
+          immersiveLoading: true,
+          progress: {
+            totalCount: 6,
+            completedCount: 2,
+            insertedCount: 2,
+            cacheHits: 1
+          }
+        };
       }
 
       return { ok: true };
@@ -69,7 +79,14 @@ describe("background runtime helpers", () => {
       providerLabel: "OpenAI 兼容接口",
       hasCompletedSetup: true,
       activeTabSupported: true,
-      activeTabImmersiveActive: true
+      activeTabImmersiveActive: true,
+      activeTabImmersiveLoading: true,
+      activeTabImmersiveProgress: {
+        totalCount: 6,
+        completedCount: 2,
+        insertedCount: 2,
+        cacheHits: 1
+      }
     });
   });
 

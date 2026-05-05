@@ -4,13 +4,25 @@ import {
 } from "./shared/settings";
 import { TranslationProviderError } from "./shared/providers";
 import { getSettings } from "./shared/storage";
-import type { ExtensionStatus, RuntimeMessage } from "./shared/types";
+import type {
+  ExtensionStatus,
+  ImmersiveProgress,
+  RuntimeMessage
+} from "./shared/types";
 
 const HTTP_PREFIX = /^https?:\/\//i;
 
 interface PageImmersiveStateResponse {
   ok?: boolean;
   immersiveActive?: boolean;
+  immersiveLoading?: boolean;
+  progress?: ImmersiveProgress;
+}
+
+interface ActiveTabImmersiveState {
+  active: boolean;
+  loading: boolean;
+  progress?: ImmersiveProgress;
 }
 
 function delay(ms: number): Promise<void> {
@@ -85,33 +97,49 @@ export function isSupportedTab(tab: chrome.tabs.Tab | null): boolean {
 
 export async function getActiveTabImmersiveState(
   tab: chrome.tabs.Tab | null
-): Promise<boolean> {
+): Promise<ActiveTabImmersiveState> {
   if (!isSupportedTab(tab) || !tab?.id) {
-    return false;
+    return {
+      active: false,
+      loading: false
+    };
   }
 
   try {
     const response = (await sendTabMessageWithRecovery<PageImmersiveStateResponse>(tab.id, {
       type: "GET_PAGE_IMMERSIVE_STATE"
     })) as PageImmersiveStateResponse | undefined;
-    return Boolean(response?.immersiveActive);
+    return {
+      active: Boolean(response?.immersiveActive),
+      loading: Boolean(response?.immersiveLoading),
+      progress: response?.progress
+    };
   } catch {
-    return false;
+    return {
+      active: false,
+      loading: false
+    };
   }
 }
 
 export async function getExtensionStatus(): Promise<ExtensionStatus> {
   const [settings, tab] = await Promise.all([getSettings(), getActiveTab()]);
   const configured = isProviderConfigured(settings);
+  const immersiveState: ActiveTabImmersiveState = configured
+    ? await getActiveTabImmersiveState(tab)
+    : {
+        active: false,
+        loading: false
+      };
 
   return {
     configured,
     providerLabel: getCurrentProviderLabel(settings.activeProvider),
     hasCompletedSetup: settings.preferences.hasCompletedSetup,
     activeTabSupported: isSupportedTab(tab),
-    activeTabImmersiveActive: configured
-      ? await getActiveTabImmersiveState(tab)
-      : false
+    activeTabImmersiveActive: immersiveState.active,
+    activeTabImmersiveLoading: immersiveState.loading,
+    activeTabImmersiveProgress: immersiveState.progress
   };
 }
 
@@ -145,6 +173,17 @@ export async function triggerTabSelectionTranslation(
 ): Promise<{ ok: true }> {
   await sendTabMessageWithRecovery(tabId, {
     type: "TRIGGER_SELECTION_TRANSLATION",
+    payload: selectionText ? { text: selectionText } : undefined
+  });
+  return { ok: true };
+}
+
+export async function triggerTabGlossaryTermEditor(
+  tabId: number,
+  selectionText?: string
+): Promise<{ ok: true }> {
+  await sendTabMessageWithRecovery(tabId, {
+    type: "OPEN_GLOSSARY_TERM_EDITOR",
     payload: selectionText ? { text: selectionText } : undefined
   });
   return { ok: true };

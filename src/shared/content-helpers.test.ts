@@ -6,7 +6,8 @@ import {
   isTranslatableBlockText,
   isTranslatableEnglishText,
   isTranslatableSelectionText,
-  normalizeText
+  normalizeText,
+  prioritizeTranslatableBlocks
 } from "./content-helpers";
 
 describe("content helpers", () => {
@@ -147,5 +148,85 @@ describe("content helpers", () => {
 
     const blocks = collectTranslatableBlocks(document);
     expect(blocks.map((block) => block.element.id)).toEqual(["title", "body"]);
+  });
+
+  it("prioritizes visible blocks, then upcoming blocks, before earlier offscreen blocks", () => {
+    document.body.innerHTML = `
+      <main>
+        <p id="above">This earlier paragraph appears above the current viewport for priority testing.</p>
+        <p id="visible">This visible paragraph should be translated before the surrounding content.</p>
+        <p id="below">This upcoming paragraph should be translated after visible content.</p>
+      </main>
+    `;
+
+    const rects: Record<string, DOMRect> = {
+      above: new DOMRect(0, -240, 640, 40),
+      visible: new DOMRect(0, 120, 640, 40),
+      below: new DOMRect(0, 740, 640, 40)
+    };
+
+    for (const [id, rect] of Object.entries(rects)) {
+      Object.defineProperty(
+        document.getElementById(id) as HTMLElement,
+        "getBoundingClientRect",
+        {
+          configurable: true,
+          value: () => rect
+        }
+      );
+    }
+
+    const blocks = collectTranslatableBlocks(document);
+    expect(blocks.map((block) => block.element.id)).toEqual([
+      "above",
+      "visible",
+      "below"
+    ]);
+    expect(
+      prioritizeTranslatableBlocks(blocks, 600).map((block) => block.element.id)
+    ).toEqual(["visible", "below", "above"]);
+  });
+
+  it("groups repeated text after viewport priority so the highest-priority duplicate leads", () => {
+    document.body.innerHTML = `
+      <main>
+        <p id="repeat-above">This repeated paragraph should share one translation request in priority order.</p>
+        <p id="unique-below">This unique paragraph should stay behind visible repeated content.</p>
+        <p id="repeat-visible">This repeated paragraph should share one translation request in priority order.</p>
+      </main>
+    `;
+
+    const rects: Record<string, DOMRect> = {
+      "repeat-above": new DOMRect(0, -240, 640, 40),
+      "unique-below": new DOMRect(0, 740, 640, 40),
+      "repeat-visible": new DOMRect(0, 120, 640, 40)
+    };
+
+    for (const [id, rect] of Object.entries(rects)) {
+      Object.defineProperty(
+        document.getElementById(id) as HTMLElement,
+        "getBoundingClientRect",
+        {
+          configurable: true,
+          value: () => rect
+        }
+      );
+    }
+
+    const prioritizedBlocks = prioritizeTranslatableBlocks(
+      collectTranslatableBlocks(document),
+      600
+    );
+    const groups = groupTranslatableBlocks(prioritizedBlocks);
+
+    expect(prioritizedBlocks.map((block) => block.element.id)).toEqual([
+      "repeat-visible",
+      "unique-below",
+      "repeat-above"
+    ]);
+    expect(groups[0]?.text).toBe(
+      "This repeated paragraph should share one translation request in priority order."
+    );
+    expect(groups[0]?.blockIndexes).toEqual([0, 2]);
   });
 });
